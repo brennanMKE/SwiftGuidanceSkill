@@ -27,8 +27,7 @@ fi
 # Check if skill already exists
 if [[ -d "${SKILL_PATH}" ]]; then
     echo -e "${GREEN}✓${NC} ${SKILL_NAME} skill already installed at ${SKILL_PATH}"
-    read -k 1 "?Replace with files from this repo? [Y/n] " REPLACE
-    echo ""
+    read "?Replace with files from this repo? [Y/n] " REPLACE
     case "${REPLACE}" in
         y|Y|"")
             echo "Removing old installation..."
