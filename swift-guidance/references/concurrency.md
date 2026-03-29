@@ -260,16 +260,16 @@ func process<T: Sendable>(item: T) async {
 
 ---
 
-## Migration Checklist
+## Code Review Checklist
 
-When modernizing code to use Swift Concurrency:
+When reviewing Swift code for concurrency:
 
-- [ ] Replace callback-based APIs with async/await
-- [ ] Replace DispatchQueue with Task (see performance.md for details)
-- [ ] Replace Combine publishers with async/await where possible
-- [ ] Mark shared state with `actor` instead of `NSLock`
-- [ ] Annotate UI code with `@MainActor`
-- [ ] Use `withTaskCancellationHandler` for cleanup
-- [ ] Store Task handles if you need to manage lifecycle
-- [ ] Mark service protocols with `Sendable`
-- [ ] Test cancellation scenarios
+- [ ] Callback-based APIs replaced with async/await
+- [ ] DispatchQueue usage replaced with Task (see performance.md for details)
+- [ ] Combine publishers replaced with async/await where possible
+- [ ] Shared mutable state protected with `actor` instead of `NSLock`
+- [ ] UI code annotated with `@MainActor`
+- [ ] Resource cleanup uses `withTaskCancellationHandler`
+- [ ] Long-running Task handles stored if lifecycle needs to be managed
+- [ ] Service protocols marked with `Sendable`
+- [ ] Cancellation scenarios handled correctly

@@ -183,19 +183,19 @@ nonisolated private let logger = Logger(subsystem: Logging.subsystem, category: 
 
 ---
 
-## Audit Checklist
+## Code Review Checklist
 
-When enabling `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, audit your codebase:
+When reviewing code in a `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` project:
 
-- [ ] **Data Models**: Mark immutable `struct` types with `nonisolated`
-- [ ] **Codable Types**: Immutable Codable structs should be `nonisolated`
-- [ ] **Service Protocols**: Mark async methods or protocol itself as `nonisolated`
+- [ ] **Data Models**: Immutable `struct` types marked with `nonisolated`
+- [ ] **Codable Types**: Immutable Codable structs marked `nonisolated`
+- [ ] **Service Protocols**: Async methods or protocol marked `nonisolated`
 - [ ] **Actor Types**: No annotation needed; actor isolation is explicit
-- [ ] **View Models**: Annotate with `@MainActor` or leave as default (already main actor)
-- [ ] **Observables**: `@Observable` marked view models should be `@MainActor`
-- [ ] **Loggers**: All file-scoped loggers are `nonisolated private let`
-- [ ] **Shared State**: Classes with shared mutable state are `actor` or `@unchecked Sendable`
-- [ ] **Test Mocks**: Mocks are `@unchecked Sendable` with documentation
-- [ ] **Build Settings**: Verify `SWIFT_DEFAULT_ACTOR_ISOLATION` is set to `MainActor`
-- [ ] **Compiler Warnings**: Address all isolation-related warnings systematically
-- [ ] **Tests Pass**: Full test suite passes with strict isolation enabled
+- [ ] **View Models**: Annotated with `@MainActor` or using default isolation correctly
+- [ ] **Observables**: `@Observable` view models use `@MainActor` correctly
+- [ ] **Loggers**: All file-scoped loggers declared as `nonisolated private let`
+- [ ] **Shared State**: Classes with mutable state are `actor` or `@unchecked Sendable`
+- [ ] **Test Mocks**: Mocks properly marked `@unchecked Sendable` with documentation
+- [ ] **Build Settings**: Project has `SWIFT_DEFAULT_ACTOR_ISOLATION` set to `MainActor`
+- [ ] **No Warnings**: No isolation-related compiler warnings
+- [ ] **Tests Pass**: Test suite passes with strict isolation enabled

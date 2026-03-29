@@ -234,14 +234,15 @@ let results = await withTaskGroup(of: Result.self) { group in
 
 ---
 
-## Migration Checklist
+## Code Review Checklist
 
-When converting from GCD to Swift Concurrency:
+When reviewing code for performance and concurrency best practices:
 
-- [ ] Replace `DispatchQueue.global().async` with `Task` or async functions
-- [ ] Remove `DispatchQueue.main.async` — use `@MainActor` instead
-- [ ] Replace `DispatchSemaphore` with actors or async/await
-- [ ] Replace `NSLock` with actors
-- [ ] Replace `DispatchGroup` with `withTaskGroup`
-- [ ] Test for thread exhaustion improvements (should see fewer total threads)
-- [ ] Profile to confirm CPU usage improvement (fewer context switches)
+- [ ] `DispatchQueue.global().async` replaced with `Task` or async functions
+- [ ] `DispatchQueue.main.async` removed in favor of `@MainActor`
+- [ ] `DispatchSemaphore` replaced with actors or async/await
+- [ ] `NSLock` usage replaced with actors
+- [ ] `DispatchGroup` replaced with `withTaskGroup`
+- [ ] No blocking code on main thread (no `.wait()`, semaphore blocks, locks)
+- [ ] Thread exhaustion risks eliminated (using Swift Concurrency, not spawning many threads)
+- [ ] Performance profiled to confirm efficiency improvements

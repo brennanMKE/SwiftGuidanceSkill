@@ -176,23 +176,17 @@ Signposts appear in Instruments (Time Profiler, System Trace) and can be correla
 
 ---
 
-## Migration from print() and NSLog()
+## Code Review Checklist
 
-```swift
-// ❌ OLD
-print("User fetched: \(user)")
-NSLog("Error: %@", error.localizedDescription)
+When reviewing logging in Swift code:
 
-// ✅ NEW
-import os.log
-nonisolated private let logger = Logger(subsystem: Logging.subsystem, category: "Users")
-logger.info("User fetched: \(user)")
-logger.error("Error: \(error.localizedDescription)")
-```
-
-Unified logging is superior:
-- Structured and searchable
-- Privacy-aware (redacts in release)
-- Automatically captured in crash reports
-- Integrates with Instruments
-- Lower overhead than print()
+- [ ] Uses `os.log` with `Logger` — no `print()` or `NSLog()`
+- [ ] File-scoped loggers declared as `nonisolated private let`
+- [ ] Logger subsystem set to consistent bundle identifier
+- [ ] Logger categories reflect the file or component name
+- [ ] Appropriate log level used (debug, info, notice, warning, error, fault)
+- [ ] Sensitive data redacted or marked `.private` explicitly
+- [ ] Non-sensitive data marked `.public` for production debugging
+- [ ] Entry/exit tracing at debug level for complex functions
+- [ ] Significant events logged at info/notice level
+- [ ] Errors logged with context (not just error message)

@@ -373,13 +373,13 @@ struct ListView: View {
 
 ---
 
-## Migration Checklist
+## Code Review Checklist
 
-- [ ] Replace ObservableObject with @Observable
-- [ ] Replace GeometryReader with onGeometryChange
-- [ ] Replace NavigationView with NavigationStack
-- [ ] Add stable IDs to List and ForEach
-- [ ] Extract state management to reduce view recomputations
-- [ ] Cache expensive computations
-- [ ] Use @Environment for theme/configuration
-- [ ] Profile view hierarchy with SwiftUI Preview performance tools
+- [ ] State management uses `@Observable` instead of ObservableObject
+- [ ] Layout code uses `onGeometryChange()` instead of GeometryReader
+- [ ] Navigation uses NavigationStack instead of deprecated NavigationView
+- [ ] List and ForEach have stable IDs defined
+- [ ] State management is extracted to minimize view recomputations
+- [ ] Expensive computations cached and not run in view body
+- [ ] Theme/configuration accessed via `@Environment`
+- [ ] View hierarchy optimized (no unnecessary nested state)

@@ -16,6 +16,7 @@ Review Swift code for correctness, modern API usage, and adherence to best pract
 3. Review logging patterns using `references/logging.md`.
 4. Check SwiftUI best practices using `references/ui.md`.
 5. Ensure performance optimizations using `references/performance.md`.
+6. Validate multiplatform project configuration using `references/multiplatform.md`.
 
 If doing a partial review, load only the relevant reference files.
 
@@ -27,6 +28,7 @@ If doing a partial review, load only the relevant reference files.
 - Use `@Observable` macro instead of `ObservableObject` in SwiftUI.
 - Avoid `GeometryReader` — use `onGeometryChange()` instead.
 - Prioritize performance and efficient resource usage.
+- Use SDK-specific build settings (`[sdk=iphone*]` and `[sdk=macos*]`) when supporting multiple platforms to avoid inheriting platform-specific defaults.
 
 ## Output Format
 
@@ -91,3 +93,4 @@ End of example.
 - `references/actor-isolation.md` - Proper actor isolation in concurrent code.
 - `references/performance.md` - Performance optimization and resource efficiency.
 - `references/ui.md` - SwiftUI and AppKit best practices.
+- `references/multiplatform.md` - Configuring iOS and macOS projects, platform-specific build settings, and resolving multiplatform issues.
