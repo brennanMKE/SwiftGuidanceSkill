@@ -75,8 +75,11 @@ Only load references that apply to the code or the user's question:
 | SwiftUI patterns, state management | `references/ui.md` | Code uses SwiftUI AND has ObservableObject, GeometryReader, or state issues |
 | Memory, CPU, disk usage | `references/performance.md` | Code has performance concerns OR user asks about optimization |
 | iOS + macOS setup, letterboxing | `references/multiplatform.md` | Project supports multiple platforms AND has build/layout issues |
+| Implicit return in functions/expressions | `references/implicit-return.md` | Code has explicit `return` statements that could be implicit OR user asks about modern Swift style |
 
 **Example:** User asks "how do I migrate from ObservableObject?" → Load only `references/ui.md`.
+
+**Example:** Code review shows several functions with explicit returns when implicit would be cleaner → Load `references/implicit-return.md` for style guidance.
 
 ### Step 3: Classify Issues by Severity
 
@@ -106,8 +109,14 @@ Before reporting, classify each issue. **Then apply the stopping rule.**
 - Missing structured logging (`os.log`) where it would help debugging
 - Inefficient state tracking in SwiftUI
 - Unused actors or thread-safety mechanisms
+- Explicit returns that could be implicit in single-expression functions/expressions
 
 **Do NOT report MEDIUM issues in standard reviews.**
+
+**OPTIONAL STYLE GUIDANCE (mention in summary if relevant, but don't prioritize over correctness):**
+- Implicit return for improved readability and modern Swift style
+
+**Note:** Only mention style guidance if you've already reported CRITICAL and HIGH issues. Prioritize correctness over style.
 
 ---
 
@@ -255,3 +264,4 @@ Load these as needed (see Step 2 above):
 - `references/ui.md` — SwiftUI patterns, @Observable, avoiding GeometryReader
 - `references/performance.md` — Performance optimization and resource efficiency
 - `references/multiplatform.md` — iOS + macOS setup, SDK-specific build settings
+- `references/implicit-return.md` — Modern implicit return patterns for single-expression functions, if expressions, and switch expressions
