@@ -40,7 +40,7 @@ This skill is designed to review Swift code and provide targeted guidance. Use i
 
 Follow these modern Swift best practices:
 
-- **Concurrency**: Always use Swift Concurrency (async/await, Task, actors) instead of DispatchQueue, Combine callbacks, or completion handlers.
+- **Concurrency**: Always use Swift Concurrency (async/await, Task, actors) instead of DispatchQueue, Combine callbacks, or completion handlers. In Swift 6+, use `@concurrent` to explicitly run work off-actor; understand that `nonisolated async` inherits the caller's isolation by default.
 - **Logging**: Use Apple's unified logging (`os.log`) with file-scoped loggers, never `print()` for debugging in production code.
 - **Thread Safety**: Properly annotate types with `nonisolated` or `@MainActor` in MainActor-by-default projects. Flag UI updates that happen off the main thread.
 - **SwiftUI**: Use `@Observable` macro instead of `ObservableObject`. Avoid `GeometryReader` when `onGeometryChange()` works instead.
@@ -72,6 +72,7 @@ Only load references that apply to the code or the user's question:
 | DispatchQueue, Combine, completion handlers | `references/concurrency.md` | Code uses old patterns OR user asks about async code |
 | print() debugging, logging setup | `references/logging.md` | Code uses `print()` OR user asks about debugging/observability |
 | @MainActor, actor isolation, thread safety | `references/actor-isolation.md` | Code has thread-safety concerns OR MainActor-by-default warnings |
+| `nonisolated async`, `@concurrent` isolation | `references/nonisolated-concurrent.md` | Code uses `nonisolated async` OR needs `@concurrent` for off-actor work, or has Swift 6 isolation issues |
 | SwiftUI patterns, state management | `references/ui.md` | Code uses SwiftUI AND has ObservableObject, GeometryReader, or state issues |
 | Memory, CPU, disk usage | `references/performance.md` | Code has performance concerns OR user asks about optimization |
 | iOS + macOS setup, letterboxing | `references/multiplatform.md` | Project supports multiple platforms AND has build/layout issues |
@@ -100,6 +101,8 @@ Before reporting, classify each issue. **Then apply the stopping rule.**
 - `ObservableObject` when `@Observable` is available (Swift 5.9+)
 - Immutable value types marked `@MainActor` (should be `nonisolated`)
 - Missing `@MainActor` on UI-bound code in MainActor-by-default projects
+- `nonisolated async` functions that should use `@concurrent` to explicitly run off-actor (Swift 6+)
+- Incorrect use of `@concurrent` in Swift 6+ (combining with `@MainActor`, or accessing actor-isolated state)
 
 **Report HIGH issues if no CRITICAL exist in that area, but STOP after 1-2.**
 
@@ -261,6 +264,7 @@ Load these as needed (see Step 2 above):
 - `references/concurrency.md` — Modern Swift Concurrency patterns, avoiding DispatchQueue and Combine
 - `references/logging.md` — Structured logging with `os.log` and proper setup
 - `references/actor-isolation.md` — Actor isolation in MainActor-by-default projects
+- `references/nonisolated-concurrent.md` — `nonisolated async` evolution, `@concurrent` attribute, Swift 6 concurrency patterns
 - `references/ui.md` — SwiftUI patterns, @Observable, avoiding GeometryReader
 - `references/performance.md` — Performance optimization and resource efficiency
 - `references/multiplatform.md` — iOS + macOS setup, SDK-specific build settings
