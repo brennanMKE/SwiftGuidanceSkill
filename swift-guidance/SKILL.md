@@ -77,6 +77,7 @@ Only load references that apply to the code or the user's question:
 | Memory, CPU, disk usage | `references/performance.md` | Code has performance concerns OR user asks about optimization |
 | iOS + macOS setup, letterboxing | `references/multiplatform.md` | Project supports multiple platforms AND has build/layout issues |
 | Implicit return in functions/expressions | `references/implicit-return.md` | Code has explicit `return` statements that could be implicit OR user asks about modern Swift style |
+| Executable entry points, `@main`, file naming | `references/executables.md` | Code defines an executable target OR user asks about entry points or `main.swift` naming |
 
 **Example:** User asks "how do I migrate from ObservableObject?" → Load only `references/ui.md`.
 
@@ -269,3 +270,4 @@ Load these as needed (see Step 2 above):
 - `references/performance.md` — Performance optimization and resource efficiency
 - `references/multiplatform.md` — iOS + macOS setup, SDK-specific build settings
 - `references/implicit-return.md` — Modern implicit return patterns for single-expression functions, if expressions, and switch expressions
+- `references/executables.md` — Executable entry points, `@main` annotation, file naming conventions, and command-line argument handling
