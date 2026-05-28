@@ -1,65 +1,101 @@
-#!/bin/zsh
+#!/usr/bin/env bash
+set -euo pipefail
 
-set -e
+# install.sh — link this repo's skill(s) into the AI coding tools on this machine.
+#
+# A skill is a folder containing SKILL.md. "Installing" links that folder into each
+# tool's skills directory (symlink, so edits are live).
+#
+# Usage:
+#   ./install.sh                    Install globally for detected tools (Claude Code, Codex)
+#   ./install.sh --project DIR      Also install into DIR/.cursor/skills (covers Cursor)
+#   ./install.sh -y                 Don't prompt before replacing
+#   REPO_URL=<git-url> ./install.sh Clone/update into a cache, then link from there
+#
+# Skills directories:
+#   Claude Code  global ~/.claude/skills    project .claude/skills
+#   Codex CLI    global ~/.codex/skills     project .codex/skills
+#   Cursor       (no global dir)            project .cursor/skills
 
-# Configuration
-SKILLS_DIR="${HOME}/.claude/skills"
-SKILL_NAME="swift-guidance"
-SKILL_PATH="${SKILLS_DIR}/${SKILL_NAME}"
-REPO_NAME="SwiftGuidanceSkill"
-REPO_URL="${REPO_URL:-https://github.com/brennanMKE/${REPO_NAME}.git}"
-SCRIPT_DIR="$(cd "$(dirname "${(%):-%x}")" && pwd)"
+PROJECT_DIR=""
+ASSUME_YES="${ASSUME_YES:-0}"
+GLOBAL_TARGETS=""
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --project)   PROJECT_DIR="${2:-}"; shift 2 ;;
+    --project=*) PROJECT_DIR="${1#*=}"; shift ;;
+    -y|--yes)    ASSUME_YES=1; shift ;;
+    -h|--help)   grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
 
-echo -e "${BLUE}Installing ${SKILL_NAME} skill...${NC}"
+have() { command -v "$1" >/dev/null 2>&1; }
 
-# Create skills directory if it doesn't exist
-if [[ ! -d "${SKILLS_DIR}" ]]; then
-    echo "Creating ${SKILLS_DIR}..."
-    mkdir -p "${SKILLS_DIR}"
-fi
-
-# Check if skill already exists
-if [[ -d "${SKILL_PATH}" ]]; then
-    echo -e "${GREEN}✓${NC} ${SKILL_NAME} skill already installed at ${SKILL_PATH}"
-    read "?Replace with files from this repo? [Y/n] " REPLACE
-    case "${REPLACE}" in
-        y|Y|"")
-            echo "Removing old installation..."
-            rm -rf "${SKILL_PATH}"
-            ;;
-        n|N)
-            echo "Installation cancelled."
-            exit 0
-            ;;
-        *)
-            echo -e "${RED}✗${NC} Invalid input. Please enter Y or n."
-            exit 1
-            ;;
-    esac
-fi
-
-# Install from local directory or git repo
-if [[ -d "${SCRIPT_DIR}/${SKILL_NAME}" ]]; then
-    # Install from local directory
-    echo "Installing from local directory..."
-    ln -s "${SCRIPT_DIR}/${SKILL_NAME}" "${SKILL_PATH}"
-    echo -e "${GREEN}✓${NC} ${SKILL_NAME} skill installed successfully"
+# --- Resolve source root (live checkout, or persistent clone) ---
+if [ -n "${REPO_URL:-}" ]; then
+  CACHE_BASE="${XDG_CACHE_HOME:-$HOME/.cache}/ai-skills"
+  repo_name="$(basename "${REPO_URL%.git}")"
+  CLONE_DIR="$CACHE_BASE/$repo_name"
+  mkdir -p "$CACHE_BASE"
+  if [ -d "$CLONE_DIR/.git" ]; then
+    echo "Updating clone in $CLONE_DIR"
+    git -C "$CLONE_DIR" pull --ff-only
+  else
+    echo "Cloning $REPO_URL into $CLONE_DIR"
+    git clone "$REPO_URL" "$CLONE_DIR"
+  fi
+  SRC_ROOT="$CLONE_DIR"
 else
-    # Clone from git repo
-    echo "Installing from git repository..."
-    git clone "${REPO_URL}" "${SKILL_PATH}" 2>/dev/null || {
-        echo -e "${RED}✗${NC} Failed to clone repository from ${REPO_URL}"
-        echo "Please set REPO_URL environment variable or run from the repo directory"
-        exit 1
-    }
-    echo -e "${GREEN}✓${NC} ${SKILL_NAME} skill installed successfully"
+  SRC_ROOT="$(cd "$(dirname "$0")" && pwd)"
 fi
+
+# --- Detect installed tools (global targets) ---
+if have claude || [ -d "$HOME/.claude" ]; then
+  GLOBAL_TARGETS="$GLOBAL_TARGETS $HOME/.claude/skills"
+fi
+if have codex || [ -d "$HOME/.codex" ]; then
+  GLOBAL_TARGETS="$GLOBAL_TARGETS $HOME/.codex/skills"
+fi
+
+# --- Link one skill folder into one target dir ---
+link_skill() {
+  src="$1"; targets_dir="$2"
+  name="$(basename "$src")"
+  dest="$targets_dir/$name"
+  mkdir -p "$targets_dir"
+  if [ -e "$dest" ] || [ -L "$dest" ]; then
+    if [ "$ASSUME_YES" != "1" ]; then
+      printf 'Replace existing "%s" in %s? [Y/n] ' "$name" "$targets_dir"
+      if [ -r /dev/tty ]; then read -r reply </dev/tty; else reply="Y"; fi
+      case "${reply:-Y}" in [nN]*) echo "  skipped $dest"; return 0 ;; esac
+    fi
+    rm -rf "$dest"
+  fi
+  ln -s "$src" "$dest"
+  echo "  linked $dest -> $src"
+}
+
+# --- Find every skill (dir containing SKILL.md) and install it ---
+find "$SRC_ROOT" -maxdepth 2 -name SKILL.md -not -path '*/.git/*' -print \
+  | while IFS= read -r skillmd; do
+      skill="$(cd "$(dirname "$skillmd")" && pwd)"
+      echo "Installing skill: $(basename "$skill")"
+      for t in $GLOBAL_TARGETS; do link_skill "$skill" "$t"; done
+      if [ -n "$PROJECT_DIR" ]; then
+        link_skill "$skill" "$PROJECT_DIR/.cursor/skills"
+        # Optional: uncomment to also install project-scoped for Claude Code / Codex
+        # link_skill "$skill" "$PROJECT_DIR/.claude/skills"
+        # link_skill "$skill" "$PROJECT_DIR/.codex/skills"
+      fi
+    done
 
 echo ""
-echo "Skill is now available in Claude Code!"
+
+if [ -z "$GLOBAL_TARGETS" ] && [ -z "$PROJECT_DIR" ]; then
+  echo "No supported AI tools detected (Claude Code / Codex)."
+  echo "Cursor is project-scoped: re-run with --project /path/to/your/project"
+elif [ -z "$PROJECT_DIR" ]; then
+  echo "Cursor skipped (no global dir). Install per project with: --project /path/to/your/project"
+fi

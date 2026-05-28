@@ -12,42 +12,61 @@ A Claude Code skill that provides comprehensive guidance on Swift best practices
 
 ## Installation
 
-### From Local Directory
+### Quick install (recommended) — `npx skills`
 
-If you have this repository cloned locally:
+Installs across supported AI coding agents (Claude Code, Codex, Cursor, and others)
+with one command:
 
 ```bash
+npx skills add brennanMKE/SwiftGuidanceSkill --skill swift-guidance
+```
+
+Target specific tools, or run non-interactively:
+
+```bash
+npx skills add brennanMKE/SwiftGuidanceSkill --skill swift-guidance -a claude-code -a codex
+npx skills add brennanMKE/SwiftGuidanceSkill --skill swift-guidance -a claude-code -g -y
+```
+
+> **Claude Code note:** if the skill installs but Claude Code doesn't see it, it
+> likely landed in `~/.agents/skills/` without a `~/.claude/skills/` symlink. Fix:
+> ```bash
+> ln -s ~/.agents/skills/swift-guidance ~/.claude/skills/swift-guidance
+> ```
+
+### Manual install — `install.sh`
+
+Clone the repo and run the installer. It links the skill into the global skills dir
+of every detected tool (Claude Code, Codex):
+
+```bash
+git clone https://github.com/brennanMKE/SwiftGuidanceSkill.git
 cd SwiftGuidanceSkill
 ./install.sh
 ```
 
-The script will create a symlink from `~/.claude/skills/swift-guidance` to your local directory, allowing live updates as you modify the skill files.
+Cursor has no global skills directory, so install it per project:
 
-### From Git Repository
+```bash
+./install.sh --project /path/to/your/project   # links into <project>/.cursor/skills
+```
 
-To install directly from GitHub:
+Install straight from git without a manual clone (caches and updates on re-run):
 
 ```bash
 REPO_URL=https://github.com/brennanMKE/SwiftGuidanceSkill.git ./install.sh
 ```
 
-Or set the environment variable and run:
+Because `install.sh` uses symlinks, edits to the skill files are picked up without
+reinstalling.
 
-```bash
-export REPO_URL=https://github.com/brennanMKE/SwiftGuidanceSkill.git
-./install.sh
-```
+### Where skills live
 
-### Installation Prompt
-
-The script will prompt if the skill already exists:
-
-```
-Replace with files from this repo? [Y/n]
-```
-
-- **Y** — removes the old installation and installs fresh
-- **n** — cancels installation and keeps the existing version
+| Tool        | Global               | Project            |
+|-------------|----------------------|--------------------|
+| Claude Code | `~/.claude/skills/`  | `.claude/skills/`  |
+| Codex CLI   | `~/.codex/skills/`   | `.codex/skills/`   |
+| Cursor      | *(project only)*     | `.cursor/skills/`  |
 
 ## Usage
 
@@ -77,15 +96,13 @@ You can request guidance on specific areas:
 
 ## Removal
 
-To remove the skill:
-
 ```bash
-rm -rf ~/.claude/skills/swift-guidance
+rm ~/.claude/skills/swift-guidance
+rm ~/.codex/skills/swift-guidance
+rm /path/to/project/.cursor/skills/swift-guidance
 ```
 
-If you installed from a local directory (symlink), this only removes the link — your local repository remains untouched.
-
-If you installed from a Git clone, this removes the cloned copy entirely.
+Removing a symlink leaves the source repo untouched.
 
 ## Reference Files
 
