@@ -92,6 +92,7 @@ You can request guidance on specific areas:
 - `Review logging setup` — loads `references/logging.md`
 - `Validate actor isolation` — loads `references/actor-isolation.md`
 - `Check SwiftUI patterns` — loads `references/ui.md`
+- `Review state writes / focus flow / "Modifying state during view update"` — loads `references/swiftui-observation.md`
 - `Analyze performance` — loads `references/performance.md`
 
 ## Removal
@@ -112,6 +113,7 @@ The skill uses the following reference materials:
 - **`swift-guidance/references/actor-isolation.md`** — MainActor-by-default and proper isolation
 - **`swift-guidance/references/logging.md`** — Apple's unified logging system setup and usage
 - **`swift-guidance/references/ui.md`** — SwiftUI best practices
+- **`swift-guidance/references/swiftui-observation.md`** — State-mutation rules for `@Observable`/`@State`: write contexts, Observation feedback loops, AppKit interop hazards, two-way model ↔ AppKit sync
 - **`swift-guidance/references/performance.md`** — Performance optimization guidelines
 
 ## Development

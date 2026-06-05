@@ -196,6 +196,6 @@ When reviewing code in a `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` project:
 - [ ] **Loggers**: All file-scoped loggers declared as `nonisolated private let`
 - [ ] **Shared State**: Classes with mutable state are `actor` or `@unchecked Sendable`
 - [ ] **Test Mocks**: Mocks properly marked `@unchecked Sendable` with documentation
-- [ ] **Build Settings**: Project has `SWIFT_DEFAULT_ACTOR_ISOLATION` set to `MainActor`
+- [ ] **Build Settings**: Project enables MainActor default isolation and strict concurrency (see `project-configuration.md`)
 - [ ] **No Warnings**: No isolation-related compiler warnings
 - [ ] **Tests Pass**: Test suite passes with strict isolation enabled
