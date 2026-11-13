@@ -1,6 +1,8 @@
 # Unified Logging with os.log
 
-Use Apple's [unified logging system](https://developer.apple.com/documentation/os/logging) (`os.log`) for structured, privacy-aware output. Logs appear in **Console.app**, `log` CLI, and are automatically captured in crash reports.
+Use Apple's [unified logging system](https://developer.apple.com/documentation/os/logging) (`Logger` from the `os` module) for structured, privacy-aware output. Logs appear in **Console.app**, the `log` CLI, and sysdiagnoses.
+
+Behavior below was verified on macOS 27 (Xcode 27.2) by logging from a test binary and reading the result with `log show`.
 
 ---
 
@@ -17,176 +19,164 @@ enum Logging {
 }
 ```
 
-Each file declares a **file-scoped, nonisolated logger** at the top:
+Each file declares a **file-scoped logger** at the top:
 
 ```swift
-import os.log
+import os
 
-nonisolated private let logger = Logger(subsystem: Logging.subsystem, category: "DataStore")
+private let logger = Logger(subsystem: Logging.subsystem, category: "DataStore")
 ```
 
-**Why `nonisolated`:**
-- `Logger` is a value type and safe to create from any thread
-- Avoids spurious `@MainActor` warnings in MainActor-by-default projects
-- Creates the logger once per file, not on each access
+**Why file-scoped `let`:**
+- Created once (globals initialize lazily), not on every access
+- `Logger` is `Sendable`, so the global is usable from any isolation — including
+  actors and nonisolated code in MainActor-by-default projects. Marking it
+  `nonisolated private let` is optional (documents intent); don't flag its absence.
 
-**Why `private`:**
-- Scopes logger to the file
-- Prevents logger leaks across modules
+**Why `private`:** scopes the logger to the file.
 
-**Why `category`:**
-- Identifies the subsystem/feature in Console.app (e.g., `"NetworkService"`, `"DataParser"`)
-- Allows filtering logs by source
+**Why `category`:** identifies the feature in Console.app (e.g. `"NetworkService"`,
+`"DataParser"`) and allows filtering by source.
 
 ---
 
 ## Log Levels
 
-Use the appropriate level for the situation:
+Levels control **how messages are stored**, not whether they appear in debug vs
+release builds:
 
-| Level | Method | When to use |
-|-------|--------|-------------|
-| **Debug** | `logger.debug(...)` | Verbose tracing: method entry/exit, variable values, state transitions |
-| **Info** | `logger.info(...)` | Informational: significant but expected events (startup, user actions) |
-| **Notice** | `logger.notice(...)` | Default level; important events (important milestones) |
-| **Warning** | `logger.warning(...)` | Unexpected but recoverable situations |
-| **Error** | `logger.error(...)` | Errors that affect functionality |
-| **Fault** | `logger.fault(...)` | Programming errors, assertions, unrecoverable failures |
+| Level | Method | Stored | When to use |
+|-------|--------|--------|-------------|
+| Debug | `logger.debug(...)` | memory only; not persisted | Verbose tracing during development |
+| Info | `logger.info(...)` | memory only, unless the `log` tool configures persistence | Helpful but non-essential detail |
+| Notice (default) | `logger.notice(...)` / `logger.log(...)` | persisted to disk (up to a storage limit) | Essential events for troubleshooting |
+| Error | `logger.error(...)` | persisted | Errors that affect functionality |
+| Fault | `logger.fault(...)` | persisted, with extra process context | Bugs and invariant violations |
+
+`logger.warning(...)` and `logger.critical(...)` are aliases: `warning` logs at
+the **error** level and `critical` at the **fault** level (verified: a
+`warning` message is stored with type `Error`).
+
+`log show` omits debug and info messages unless you pass `--info --debug`.
 
 ---
 
 ## Examples
 
 ```swift
-// Entry/exit tracing
 logger.debug("Entering fetchUsers()")
-
-// Significant event
-logger.info("Network request started for URL: \(url)")
-
-// Parameter values
-logger.debug("Processing item: id=\(item.id) count=\(items.count)")
-
-// Warning about unexpected state
-logger.warning("Retry attempt \(attempts)/\(maxRetries)")
-
-// Error with context
-logger.error("Failed to parse JSON: \(error)")
-
-// Fault for programming errors
+logger.info("Request started: \(url, privacy: .public)")
+logger.debug("Processing item id=\(item.id) count=\(items.count)")
+logger.error("Retry \(attempts)/\(maxRetries) failed")
+logger.error("Failed to parse JSON: \(error.localizedDescription, privacy: .public)")
 logger.fault("Invariant violated: state should not be nil")
 ```
 
 ---
 
-## Privacy in Release Builds
+## Privacy
 
-`os.log` **redacts dynamic values in release builds by default**. To show a value in release logs:
+Interpolated values are redacted as `<private>` **unless the process is being
+debugged** — this is not a debug-vs-release build distinction (verified: an
+unoptimized build run without a debugger showed `<private>`). Apple: "By default,
+the system doesn't redact integer, floating-point and Boolean values, but it does
+redact the contents of dynamic strings and complex dynamic objects."
+
+Verified defaults:
+
+| Interpolated value | Shown by default |
+|---|---|
+| `Int`, `Double`, `Bool` | yes |
+| `String` | `<private>` |
+| `Date` | `<private>` |
+| Custom types (`CustomStringConvertible`) | `<private>` |
 
 ```swift
-// ❌ REDACTED in release (shows "<redacted>")
-logger.debug("User name: \(user.name)")
-
-// ✅ VISIBLE in release
-logger.debug("User name: \(user.name, privacy: .public)")
-
-// ✅ EXPLICITLY REDACTED (for clarity)
-logger.debug("API key: \(apiKey, privacy: .private)")
-
-// ✅ For non-string values (numbers, dates always safe)
-logger.debug("User ID: \(user.id) Request count: \(count)")
+logger.notice("User name: \(user.name)")                     // <private>
+logger.notice("Screen: \(screenName, privacy: .public)")      // visible
+logger.notice("Token: \(token, privacy: .private)")           // explicitly redacted
+logger.notice("Email hash: \(email, privacy: .private(mask: .hash))") // correlatable, not readable
+logger.notice("Count: \(count)")                              // visible (integer)
 ```
 
 **Guidelines:**
-- Keep sensitive data (passwords, tokens, PII) at default (redacted)
-- Use `.public` for non-sensitive values needed in production debugging
-- Debug/Info logs are visible in debug builds; Warning/Error/Fault are visible in release
+- Leave sensitive data (passwords, tokens, PII) at the default or mark it `.private`
+- Mark non-sensitive strings `.public` when you need them in field logs
+- Use `.private(mask: .hash)` to correlate values across messages without exposing them
+- Don't rely on default visibility for types other than integers, floats, and booleans — mark them explicitly
 
 ---
 
 ## Viewing Logs
 
-### Console.app (Visual)
+### Console.app
 
-1. Open Console.app → select your device
-2. Filter by subsystem: enter your app's bundle identifier
-3. Click the category filter icon to filter by category
-4. Search by text: `Command+F`
+1. Open Console.app → select the device
+2. Click **Start Streaming** (or use **Action → Include Info/Debug Messages** to see lower levels)
+3. Filter by subsystem (your bundle identifier) and category
 
 ### Command Line
 
+zsh has a built-in `log` command; use `/usr/bin/log` in scripts if `log` misbehaves.
+
 ```bash
-# All logs from your app
+# Live stream (log stream follows by default)
 log stream --predicate 'subsystem == "com.example.app"' --level debug
 
-# From a specific category
+# A specific category
 log stream --predicate 'subsystem == "com.example.app" and category == "DataStore"' --level debug
 
-# Real-time monitoring
-log stream --predicate 'subsystem == "com.example.app"' --follow --level debug
+# Stored logs from the last 10 minutes (add --info --debug for lower levels)
+log show --last 10m --info --debug --predicate 'subsystem == "com.example.app"'
 
-# Show logs from last 10 minutes
-log show --last 10m --predicate 'subsystem == "com.example.app"'
-
-# Export to file
+# Export
 log show --last 1h --predicate 'subsystem == "com.example.app"' > app-logs.txt
 ```
-
-### Filtering in Console.app
-
-- **Exclude:** Drag a log entry to the Exclude section
-- **Include:** Right-click → "Add to Filter"
-- **Composite:** Combine multiple filters with AND/OR logic
 
 ---
 
 ## Signposts for Performance Analysis
 
-Use signposts to measure operation timing in Instruments:
+Use `OSSignposter` (iOS 15 / macOS 12+) to measure intervals in Instruments.
+The older `os_signpost` / `OSSignpostID(log:)` APIs take an `OSLog`, not a `Logger`.
 
 ```swift
-import os.log
+import os
 
-nonisolated private let logger = Logger(subsystem: Logging.subsystem, category: "Performance")
+private let signposter = OSSignposter(subsystem: Logging.subsystem, category: "Performance")
 
 func expensiveOperation() {
-    let signpostID = OSSignpostID(log: logger)
-    os.signpost(.begin, log: logger, name: "DataFetch", signpostID: signpostID)
+    let state = signposter.beginInterval("DataFetch")
+    defer { signposter.endInterval("DataFetch", state) }
 
-    // Perform work
     let data = fetchData()
-
-    os.signpost(.end, log: logger, name: "DataFetch", signpostID: signpostID)
+    ...
 }
+
+// Or wrap a closure
+let data = signposter.withIntervalSignpost("DataFetch") { fetchData() }
 ```
 
-Signposts appear in Instruments (Time Profiler, System Trace) and can be correlated with other system activity.
+Intervals appear in Instruments' os_signpost track for your subsystem. To show them in the **Points of Interest** track, create the signposter with the `.pointsOfInterest` category: `OSSignposter(subsystem: Logging.subsystem, category: .pointsOfInterest)`.
 
 ---
 
 ## Best Practices
 
-1. **Use categories consistently** — Same file = same category
-2. **Log at appropriate levels** — Don't spam debug logs
-3. **Include context** — Log what's happening, not just that it happened
-4. **Avoid logging sensitive data** — Or use `.private` explicitly
-5. **Keep loggers file-scoped** — Don't share loggers across files
-6. **Use `nonisolated private let`** — Avoids isolation warnings
-7. **Log errors with context** — Include the error and why it matters
+1. **Use categories consistently** — one category per file or component
+2. **Pick levels by importance** — debug for tracing, notice and above for what you need in the field
+3. **Include context** — what happened and why it matters
+4. **Mark privacy explicitly** for anything other than numbers and booleans
+5. **Keep loggers file-scoped** — `private let logger = Logger(...)`
 
 ---
 
 ## Code Review Checklist
 
-When reviewing logging in Swift code:
-
-- [ ] Uses `os.log` with `Logger` — no `print()` or `NSLog()`
-- [ ] File-scoped loggers declared as `nonisolated private let`
-- [ ] Logger subsystem set to consistent bundle identifier
-- [ ] Logger categories reflect the file or component name
-- [ ] Appropriate log level used (debug, info, notice, warning, error, fault)
-- [ ] Sensitive data redacted or marked `.private` explicitly
-- [ ] Non-sensitive data marked `.public` for production debugging
-- [ ] Entry/exit tracing at debug level for complex functions
-- [ ] Significant events logged at info/notice level
-- [ ] Errors logged with context (not just error message)
+- [ ] Uses `Logger` — no `print()` or `NSLog()` in production code
+- [ ] File-scoped `private let` loggers with a consistent subsystem
+- [ ] Categories reflect the file or component
+- [ ] Levels match importance (debug/info aren't persisted; notice+ are)
+- [ ] Sensitive values default-redacted or `.private`; needed non-sensitive strings marked `.public`
+- [ ] Errors logged with context
+- [ ] Signposts use `OSSignposter`

@@ -1,18 +1,19 @@
 # Swift Executables and Entry Points
 
-This document covers best practices for Swift executable targets, including entry point definition, file naming, and common patterns.
+Best practices for Swift executable targets: entry points, file naming, and
+common patterns. Behavior verified with Swift 6.4.2 / Xcode 27.2 using plain
+`swiftc` and SwiftPM.
 
 ---
 
-## Rule 1: Never Name the Source File `main.swift`
+## Rule 1: Don't Put `@main` in `main.swift`
 
-**This is the most important rule.**
+A module has exactly **one** entry point — either top-level code in
+`main.swift`, or a single `@main` type. Don't mix them.
 
-In Swift, the `@main` attribute designates the entry point for an executable. The compiler looks for exactly one `@main` annotation across the entire build.
-
-If you name your entry point file `main.swift`, the compiler generates an implicit `main` function, which conflicts with any explicit `@main` annotation.
-
-### The Problem
+The compiler treats `main.swift` as top-level code, which generates the entry
+point implicitly. Adding `@main` inside it (or anywhere else in a module that
+also has top-level code in `main.swift`) fails:
 
 ```swift
 // ❌ File: main.swift
@@ -24,14 +25,21 @@ struct MyApp {
 }
 ```
 
-**Result:** Compilation error — implicit `main` from `main.swift` naming conflicts with explicit `@main`.
+```
+error: 'main' attribute cannot be used in a module that contains top-level code
+```
+
+**Build-system caveat:** SwiftPM 6.x compiles executable targets with
+`-parse-as-library`, so this exact file *does* build and run under `swift build`
+(verified). It fails with plain `swiftc` and in Xcode targets. Don't rely on the
+SwiftPM behavior — code that only builds in one system is fragile.
 
 ### The Solution
 
-Choose a descriptive name for your entry point file:
+Pick one style.
 
 ```swift
-// ✅ File: App.swift (or MyApp.swift, AppEntry.swift, etc.)
+// ✅ @main in a file named after the type: MyApp.swift (or App.swift, CLI.swift)
 @main
 struct MyApp {
     static func main() {
@@ -40,13 +48,25 @@ struct MyApp {
 }
 ```
 
-Or structure your project with a separate module and let the compiler find `@main` automatically.
+```swift
+// ✅ main.swift with top-level code (what Xcode's Command Line Tool template generates)
+print("Hello")
+let result = await fetchSomething()   // top-level await works since Swift 5.7 (SE-0343)
+```
 
-### Why This Matters
+Top-level code in `main.swift` is `@MainActor`-isolated, like a synchronous
+`@main` `main()`.
 
-- The filename `main.swift` has special meaning in Swift—it creates an implicit entry point
-- Explicit `@main` is clearer and more flexible than relying on file naming conventions
-- Mixing them causes immediate compilation failure
+**Review rule:** flag only `@main` inside `main.swift`, or `@main` plus
+top-level code elsewhere in `main.swift`. A `main.swift` with top-level code
+and no `@main` is fine.
+
+Note: compiling a **single** file with plain `swiftc` treats that file as the
+main file even if it isn't named `main.swift`, so a lone `@main` file needs
+`swiftc -parse-as-library`. Xcode and SwiftPM pass `-parse-as-library`
+automatically when the target has no `main.swift` (verified: a single-file
+Xcode 27 command-line target with `@main` in `ImageTool.swift` builds and runs
+with no extra flags) — don't add it to `OTHER_SWIFT_FLAGS`.
 
 ---
 
@@ -54,69 +74,59 @@ Or structure your project with a separate module and let the compiler find `@mai
 
 ### Pattern 1: Single `@main` Struct
 
-Use a simple struct with a static `main()` method:
-
 ```swift
-// App.swift
-import Foundation
-
+// MyApp.swift
 @main
 struct MyApp {
     static func main() {
         print("Application started")
-        // Perform setup and run
         runApplication()
     }
-    
+
     static func runApplication() {
         // Main application logic
     }
 }
 ```
 
-**Best for:** Simple command-line tools, single-entry-point executables.
+**Best for:** Simple command-line tools.
 
-### Pattern 2: `@main` with Async Entry Point
+### Pattern 2: Async (and throwing) Entry Point
 
-For applications using Swift Concurrency:
+`main()` may be `async`, `throws`, or both. An uncaught error from a throwing
+`main()` terminates the process with a non-zero status.
 
 ```swift
-// App.swift
-import Foundation
-
+// MyApp.swift
 @main
 struct AsyncApp {
-    static func main() async {
-        await runApplication()
-    }
-    
-    static func runApplication() async {
+    static func main() async throws {
         let result = try await performWork()
         print("Completed: \(result)")
+    }
+
+    static func performWork() async throws -> Int {
+        42
     }
 }
 ```
 
-**Best for:** Async/await based executables, networking apps, modern concurrency patterns.
+**Best for:** Executables that use async/await.
 
-### Pattern 3: Multiple Entry Points with Subcommands
-
-Use an enum or a structured approach for CLI tools with multiple commands:
+### Pattern 3: Subcommands
 
 ```swift
-// App.swift
-import Foundation
-
+// CLI.swift
 @main
 struct CLI {
     static func main() {
         let arguments = CommandLine.arguments
-        
+
         guard arguments.count > 1 else {
             printUsage()
             return
         }
-        
+
         switch arguments[1] {
         case "build":
             buildCommand()
@@ -129,15 +139,10 @@ struct CLI {
             printUsage()
         }
     }
-    
-    static func buildCommand() {
-        print("Building...")
-    }
-    
-    static func testCommand() {
-        print("Testing...")
-    }
-    
+
+    static func buildCommand() { print("Building...") }
+    static func testCommand() { print("Testing...") }
+
     static func printUsage() {
         print("""
         Usage: cli <command>
@@ -150,78 +155,68 @@ struct CLI {
 }
 ```
 
-**Best for:** CLI tools with multiple subcommands.
+For anything beyond a few subcommands, use
+[swift-argument-parser](https://github.com/apple/swift-argument-parser) — a
+separate package you add as a dependency
+(`.package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0")`),
+with `@main struct Tool: ParsableCommand` or `AsyncParsableCommand`.
 
 ---
 
-## Compiler-Generated vs. Explicit `@main`
+## No Entry Point at All
 
-### Implicit Entry Point (Implicit `main`)
+If a module has neither `@main` nor `main.swift`, there is no entry point and
+the **link fails**:
 
-If no `@main` annotation exists and no file is named `main.swift`, the compiler generates a default entry point that does nothing.
-
-```swift
-// ❌ No @main, no main.swift
-// Compiler generates an empty main() automatically
-// Application starts but does nothing
 ```
-
-### Explicit Entry Point (Explicit `@main`)
-
-Using `@main` is always clearer:
-
-```swift
-// ✅ Explicit and clear
-@main
-struct MyApp {
-    static func main() {
-        print("Starting application")
-    }
-}
+Undefined symbols for architecture arm64: "_main"
 ```
-
-**Prefer explicit `@main` for clarity and control.**
 
 ---
 
-## File Organization Best Practices
+## Choosing a Style
 
-For larger executables, organize code into logical modules:
+Both styles are fully supported. Prefer one consistently per project:
+
+- **`@main`** when the entry type should be named, or `main()` should be
+  `async throws` with a clear signature; also required for SwiftUI/AppKit/UIKit
+  `App`/delegate entry points
+- **`main.swift`** for short scripts and tools; it's what Xcode's Command Line
+  Tool template generates
+
+---
+
+## File Organization
+
+SwiftPM expects sources under `Sources/<TargetName>/` (unless the target sets `path:`):
 
 ```
-MyApp/
+MyTool/
+  Package.swift
   Sources/
-    App.swift              # Contains @main entry point
-    Commands/
-      BuildCommand.swift
-      TestCommand.swift
-    Utilities/
-      Logger.swift
-      FileHelper.swift
+    MyTool/
+      MyTool.swift          # @main entry point
+      Commands/
+        BuildCommand.swift
+      Utilities/
+        FileHelper.swift
 ```
 
-**Keep the entry point file (`App.swift`) focused on orchestration, not implementation details.**
+Keep the entry point focused on orchestration, not implementation details.
 
 ---
 
-## Accessing Command-Line Arguments
-
-Swift provides `CommandLine.arguments` for parsing input:
+## Command-Line Arguments
 
 ```swift
-import Foundation
-
 @main
 struct CLIApp {
     static func main() {
         let args = CommandLine.arguments
-        
-        // args[0] is the executable name
-        // args[1...] are the provided arguments
-        
+        // args[0] is the executable path; args[1...] are the arguments
+
         if args.count > 1 {
-            let command = args[1]
-            print("Running command: \(command)")
+            print("Running command: \(args[1])")
         } else {
             print("No arguments provided")
         }
@@ -229,13 +224,11 @@ struct CLIApp {
 }
 ```
 
-For more complex parsing, consider using the `ArgumentParser` library (part of the Swift Package Manager ecosystem).
-
 ---
 
 ## Exit Codes
 
-Always exit with appropriate status codes:
+Returning normally from `main()` exits with status `0`. Exit non-zero on failure:
 
 ```swift
 import Foundation
@@ -245,40 +238,37 @@ struct CLIApp {
     static func main() {
         do {
             try runApplication()
-            exit(0)  // Success
         } catch {
             fputs("Error: \(error)\n", stderr)
-            exit(1)  // Failure
+            exit(1)
         }
     }
-    
+
     static func runApplication() throws {
         // Implementation
     }
 }
 ```
 
-**Standard conventions:**
-- `0` — Success
-- `1` — General error
-- `2` — Misuse of shell command syntax
-- Other codes — Application-specific errors
+**Conventions:**
+- `0` — success
+- `1` — general error
+- `2` — shell builtin misuse (shell convention); `64` (`EX_USAGE`) — command-line usage error (sysexits; what ArgumentParser uses for validation errors)
+- other — application-specific
 
 ---
 
 ## Testing Executables
 
-For testable executables, separate logic from the `@main` entry point:
+Keep `@main` thin and move logic into types that tests can reach.
+`@testable import` of an executable target works in SwiftPM test targets.
 
 ```swift
-// App.swift
-import Foundation
-
+// MyApp.swift
 @main
 struct MyApp {
     static func main() {
-        let app = Application()
-        app.run()
+        Application().run()
     }
 }
 
@@ -289,65 +279,68 @@ struct Application {
     }
 }
 
-// ApplicationTests.swift
-import XCTest
+// Tests/MyAppTests/ApplicationTests.swift
+import Testing
+@testable import MyApp
 
-final class ApplicationTests: XCTestCase {
-    func testApplicationLogic() {
-        let app = Application()
-        // Test without relying on @main
-    }
+@Test func applicationRuns() {
+    Application().run()
 }
 ```
-
-**Best practice:** Keep the `@main` method thin, and move testable logic into separate types.
 
 ---
 
 ## Common Mistakes
 
-### ❌ Mistake 1: Naming the entry point file `main.swift`
+### ❌ Mistake 1: `@main` inside `main.swift`
 
 ```swift
-// main.swift — DO NOT USE THIS NAME
+// main.swift
 @main
 struct App {
     static func main() { }
 }
 ```
 
-**Fix:** Rename to `App.swift` or another descriptive name.
+**Fix:** rename the file (e.g. `App.swift`), or remove `@main` and use top-level code.
 
-### ❌ Mistake 2: Multiple `@main` Annotations
+### ❌ Mistake 2: Multiple `@main` types in one module
 
 ```swift
 // App.swift
 @main
-struct AppEntry { }
+struct AppEntry {
+    static func main() { }
+}
 
 // Other.swift
 @main
-struct OtherEntry { }
+struct OtherEntry {
+    static func main() { }
+}
 ```
 
-**Fix:** Use exactly one `@main` annotation per executable.
+Fails with `'main' attribute can only apply to one type in a module` (or a
+`duplicate symbol '_main'` link error in non-whole-module builds).
 
-### ❌ Mistake 3: Forgetting to Handle Errors
+**Fix:** exactly one `@main` per module.
+
+### ❌ Mistake 3: Swallowing errors
 
 ```swift
 // ❌ Silent failure
 @main
 struct App {
     static func main() {
-        try? performWork()  // Errors are silently ignored
+        try? performWork()
     }
 }
 ```
 
-**Fix:** Properly handle and report errors:
-
 ```swift
-// ✅ Explicit error handling
+// ✅ Report and exit non-zero
+import Foundation
+
 @main
 struct App {
     static func main() {
@@ -365,23 +358,20 @@ struct App {
 
 ## Code Review Checklist
 
-When reviewing executable entry points:
-
-- [ ] Entry point file is NOT named `main.swift`
-- [ ] Exactly one `@main` annotation per executable
-- [ ] `main()` method is static
-- [ ] Entry point is concise and delegates to other functions/types
-- [ ] Errors are handled with appropriate exit codes
-- [ ] Command-line arguments are parsed correctly (or validated)
-- [ ] Testable logic is separated from `@main`
-- [ ] Exit codes follow standard conventions (0 = success, 1+ = failure)
+- [ ] No `@main` inside `main.swift`; no mix of top-level code and `@main`
+- [ ] Exactly one `@main` type per module
+- [ ] `main()` is `static` (may be `async` / `throws`)
+- [ ] Entry point is thin and delegates to other types
+- [ ] Errors are reported and produce a non-zero exit status
+- [ ] Command-line arguments are validated (ArgumentParser for non-trivial CLIs)
+- [ ] Testable logic is separated from the entry point
 
 ---
 
 ## Summary
 
-1. **Never name the entry point file `main.swift`** — it conflicts with `@main`
-2. **Use `@main` explicitly** — it's clearer than implicit entry points
-3. **Keep `main()` simple** — delegate to other functions
-4. **Handle errors properly** — use appropriate exit codes
-5. **Test without `@main`** — separate testable logic
+1. **One entry point per module** — `@main` type *or* `main.swift` top-level code, never both
+2. **Don't put `@main` in `main.swift`** — it fails outside SwiftPM
+3. **Keep `main()` thin** — delegate to other types
+4. **Exit non-zero on failure**
+5. **Test the logic, not the entry point**

@@ -1,27 +1,37 @@
 # Swift Concurrency
 
-Never use Combine or Dispatch for concurrency. Always use modern Swift Concurrency (async/await, Task, actors).
+Prefer Swift Concurrency (async/await, `Task`, task groups, actors) over
+Dispatch and completion handlers for new asynchronous code. Combine remains
+reasonable for existing reactive pipelines, but don't use it for one-shot
+async work.
+
+Code samples here compile under Swift 6 mode; behavioral claims were verified
+by running code with Swift 6.4.
 
 ---
 
 ## Core Principles
 
-1. **Use async/await** — The standard for asynchronous code in Swift 5.5+
-2. **Avoid DispatchQueue, Combine, and callbacks** — These are legacy patterns
-3. **Use Task for fire-and-forget work** — Structured concurrency ensures cleanup
-4. **Use actors for shared mutable state** — Thread-safe by design
-5. **Use @MainActor for UI-bound code** — Compile-time safety for main thread access
+1. **Use async/await** for asynchronous work
+2. **Avoid DispatchQueue and completion handlers** in new code
+3. **Prefer structured concurrency** (`async let`, task groups) — child tasks
+   are awaited and cancelled with their parent
+4. **Use unstructured `Task {}` deliberately** — it is *not* structured; keep
+   the handle when you need to cancel or await it
+5. **Protect shared mutable state** with an actor (async access) or `Mutex`
+   (synchronous access)
+6. **Use `@MainActor` for UI-bound code** (implicit under MainActor default
+   isolation)
 
 ---
 
 ## async/await vs Callbacks
 
-**Problem with callbacks:**
 ```swift
-// ❌ AVOID: Callback hell, harder to follow control flow
+// ❌ AVOID: nested callbacks, force-unwraps, easy to forget to call completion
 func fetchUser(id: String, completion: @escaping (User?, Error?) -> Void) {
     URLSession.shared.dataTask(with: url) { data, _, error in
-        if let error = error {
+        if let error {
             completion(nil, error)
             return
         }
@@ -31,95 +41,124 @@ func fetchUser(id: String, completion: @escaping (User?, Error?) -> Void) {
 }
 ```
 
-**Solution with async/await:**
 ```swift
-// ✅ PREFERRED: Linear flow, clearer error handling
+// ✅ PREFERRED: linear flow, typed errors
 func fetchUser(id: String) async throws -> User {
     let (data, _) = try await URLSession.shared.data(from: url)
     return try JSONDecoder().decode(User.self, from: data)
 }
 
-// Usage
 let user = try await fetchUser(id: "123")
+```
+
+Forgetting `await` is a compile error ("expression is 'async' but is not
+marked with 'await'"), so it doesn't need review attention.
+
+### Bridging a callback API you can't change
+
+```swift
+func fetchUser(id: String) async throws -> User {
+    try await withCheckedThrowingContinuation { continuation in
+        legacyClient.fetchUser(id: id) { result in
+            continuation.resume(with: result)   // resume exactly once
+        }
+    }
+}
 ```
 
 ---
 
-## Task, Task Groups, and Structured Concurrency
+## Tasks
 
-### Basic Task Usage
+### Unstructured `Task {}`
 
 ```swift
-// ✅ Fire-and-forget background work
+// Inherits the current actor: created on @MainActor → runs on the main actor
 Task {
     let result = await expensiveComputation()
-    updateUI(result)  // Resumes on main thread if called from @MainActor context
+    updateUI(result)
 }
 
-// ✅ Detached task (for truly independent work)
+// Does not inherit the actor, priority, or task-locals
 Task.detached {
-    await backgroundWork()  // Not part of parent task hierarchy
+    await backgroundWork()
 }
+```
 
-// ✅ Check for cancellation
-Task {
-    while !Task.isCancelled {
-        await doWork()
+**A `Task` runs to completion whether or not you keep its handle.** Dropping
+the handle does not cancel or deallocate it (verified; Apple: "A task runs
+regardless of whether you keep a reference to it."). Keep the handle when you
+need to **cancel** it or **await its result**:
+
+```swift
+// ✅ Store the handle to manage lifetime (e.g. cancel when the owner goes away)
+@MainActor
+final class Poller {
+    private var task: Task<Void, Never>?
+
+    func start() {
+        task?.cancel()
+        task = Task {
+            while !Task.isCancelled {
+                await poll()
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    func stop() {
+        task?.cancel()
+        task = nil
     }
 }
 ```
 
+In SwiftUI, prefer `.task { }` / `.task(id:)` — the view cancels it on
+disappear.
+
 ### Coordinating Multiple Async Operations
 
 ```swift
-// ❌ AVOID: Unstructured concurrency with multiple Tasks
+// ❌ AVOID: independent Tasks — no single point to await, cancel, or handle errors
 Task { await fetchUsers() }
 Task { await fetchPosts() }
-Task { await fetchComments() }
-// No way to know when all complete or handle errors together
 
-// ✅ PREFERRED: Structured concurrency with TaskGroup
-Task {
-    let results = await withTaskGroup(of: Result.self) { group in
-        group.addTask { await fetchUsers() }
-        group.addTask { await fetchPosts() }
-        group.addTask { await fetchComments() }
+// ✅ PREFERRED: async let for a fixed number of child tasks
+async let users = fetchUsers()
+async let posts = fetchPosts()
+let (u, p) = try await (users, posts)
 
-        var collected: [Result] = []
-        for await result in group {
-            collected.append(result)
-        }
-        return collected
+// ✅ PREFERRED: task group for a dynamic number
+let images = try await withThrowingTaskGroup(of: (URL, Image).self) { group in
+    for url in urls {
+        group.addTask { (url, try await loadImage(url)) }
     }
-    updateUI(with: results)
+    var result: [URL: Image] = [:]
+    for try await (url, image) in group {
+        result[url] = image
+    }
+    return result
 }
 ```
 
 ### Limiting Concurrency
 
-When you need to limit how many tasks run concurrently (e.g., API rate limiting):
-
 ```swift
-// ✅ Process items with limited concurrency
-let results = await withTaskGroup(of: Result.self) { group in
-    var pending = items.makeIterator()
+// ✅ At most `maxConcurrency` child tasks in flight
+let results = await withTaskGroup(of: Output.self) { group in
     let maxConcurrency = 3
-    var activeTasks = 0
+    var pending = items.makeIterator()
 
-    // Fill initial batch
-    while activeTasks < maxConcurrency, let item = pending.next() {
-        group.addTask { await processItem(item) }
-        activeTasks += 1
+    for _ in 0..<maxConcurrency {
+        guard let item = pending.next() else { break }
+        group.addTask { await process(item) }
     }
 
-    // As tasks complete, add more
-    var collected: [Result] = []
-    for await result in group {
-        collected.append(result)
+    var collected: [Output] = []
+    for await output in group {
+        collected.append(output)
         if let item = pending.next() {
-            group.addTask { await processItem(item) }
-        } else {
-            activeTasks -= 1
+            group.addTask { await process(item) }
         }
     }
     return collected
@@ -128,88 +167,47 @@ let results = await withTaskGroup(of: Result.self) { group in
 
 ---
 
-## Cancellation and withTaskCancellationHandler
+## Cancellation
+
+Cancellation is cooperative: check `Task.isCancelled` or call
+`try Task.checkCancellation()`. Many async APIs (`Task.sleep`, `URLSession`)
+throw `CancellationError` when cancelled.
 
 ```swift
-// ✅ Respond to cancellation
-Task {
-    await withTaskCancellationHandler {
-        // Main work
-        while !Task.isCancelled {
-            await doWork()
-        }
+for item in items {
+    try Task.checkCancellation()
+    await process(item)
+}
+```
+
+### `withTaskCancellationHandler` is for *reacting* to cancellation, not cleanup
+
+`onCancel` runs **immediately and concurrently** with the operation when the
+task is cancelled — and if the task was already cancelled, it runs **before**
+the operation starts (both verified; documented by Apple). It must be
+thread-safe and is typically used to interrupt something the operation is
+blocked on (a non-async API, a continuation, a socket).
+
+```swift
+// ✅ Forward cancellation to a callback-based API
+func download(_ url: URL) async throws -> Data {
+    let request = LegacyRequest(url)
+    return try await withTaskCancellationHandler {
+        try await request.start()
     } onCancel: {
-        // Cleanup: called when Task is cancelled
-        cleanupResources()
-    }
-}
-
-// ✅ Check for cancellation in loops
-Task {
-    for item in items {
-        guard !Task.isCancelled else { break }
-        await processItem(item)
+        request.cancel()   // LegacyRequest.cancel() must be thread-safe
     }
 }
 ```
 
----
-
-## Avoiding Common Mistakes
-
-### Don't Mix async/await with Callbacks
+**Cleanup that must happen however the work ends** (success, error, or
+cancellation) belongs in `defer`:
 
 ```swift
-// ❌ AVOID: Mixing paradigms
-func fetchAndUpdate(completion: @escaping (User?) -> Void) {
-    Task {
-        let user = try await fetchUser()
-        completion(user)  // Mixing callback with async/await
-    }
-}
-
-// ✅ PREFERRED: Pure async/await
-func fetchAndUpdate() async -> User {
-    return try await fetchUser()
-}
-```
-
-### Don't Use Task Without Storing the Handle
-
-```swift
-// ❌ PROBLEM: Task is immediately deallocated if not stored
-func startBackgroundWork() {
-    Task {
-        await longRunningTask()  // May be cancelled before it completes
-    }
-}
-
-// ✅ PREFERRED: Store the task if you need to manage its lifecycle
-var backgroundTask: Task<Void, Never>?
-
-func startBackgroundWork() {
-    backgroundTask = Task {
-        await longRunningTask()
-    }
-}
-
-func stopBackgroundWork() {
-    backgroundTask?.cancel()
-    backgroundTask = nil
-}
-```
-
-### Don't Call Async Functions Without Awaiting
-
-```swift
-// ❌ WRONG: Forgot to await
-Task {
-    let user = fetchUser()  // Returns Task, not User!
-}
-
-// ✅ CORRECT: Always await async functions
-Task {
-    let user = try await fetchUser()
+func process(file: URL) async throws {
+    let handle = try FileHandle(forReadingFrom: file)
+    defer { try? handle.close() }
+    ...
 }
 ```
 
@@ -218,58 +216,60 @@ Task {
 ## MainActor and UI Updates
 
 ```swift
-// ✅ Mark view models and UI coordinators as @MainActor
+// ✅ View model: @Observable + @MainActor (implicit under MainActor default isolation)
 @MainActor
-class UserViewModel: Observable {
-    @ObservationIgnored private(set) var user: User?
+@Observable
+final class UserViewModel {
+    private(set) var user: User?
 
     func loadUser(id: String) async throws {
-        self.user = try await fetchUser(id: id)
-    }
-}
-
-// ✅ UI updates from background tasks
-Task {
-    let user = try await fetchUser(id: "123")
-    await MainActor.run {
-        viewModel.user = user
+        user = try await fetchUser(id: id)   // resumes on the main actor
     }
 }
 ```
 
-Note: If `SWIFT_DEFAULT_ACTOR_ISOLATION` is set to `MainActor` it will not be necessary to explicitly isolate view models to MainActor.
+Don't hand-conform to `Observable` or mark observed properties
+`@ObservationIgnored` — without the macro, observers are never notified
+(verified), and SwiftUI won't update.
+
+Code already on the main actor doesn't need `MainActor.run`. Use
+`await MainActor.run { }` only from a nonisolated context — and prefer calling
+a `@MainActor` method instead:
+
+```swift
+// From a nonisolated / @concurrent context
+let user = try await fetchUser(id: "123")
+await viewModel.apply(user)        // @MainActor method; the await hops to main
+```
 
 ---
 
 ## Protocols and Generic Constraints
 
-When defining async protocols, use `Sendable` and proper isolation:
-
 ```swift
-// ✅ Async service protocol
-protocol UserService: Sendable {
-    nonisolated func fetchUser(id: String) async throws -> User
-    nonisolated func createUser(_ user: User) async throws -> User
+// ✅ Service protocol usable from any isolation
+nonisolated protocol UserService: Sendable {
+    func fetchUser(id: String) async throws -> User
+    func createUser(_ user: User) async throws -> User
 }
 
-// ✅ Generic constraint for concurrent types
-func process<T: Sendable>(item: T) async {
-    // Can safely share T across task boundaries
-}
+// ✅ Generic constraint for values that cross task boundaries
+func process<T: Sendable>(item: T) async { ... }
 ```
+
+Under MainActor default isolation, unannotated protocol requirements are
+`@MainActor` — see `actor-isolation.md`.
 
 ---
 
 ## Code Review Checklist
 
-When reviewing Swift code for concurrency:
-
-- [ ] Callback-based APIs replaced with async/await
-- [ ] DispatchQueue usage replaced with Task (see performance.md for details)
-- [ ] Combine publishers replaced with async/await where possible
-- [ ] Shared mutable state protected with `actor` instead of `NSLock`
-- [ ] UI code annotated with `@MainActor`
-- [ ] Resource cleanup uses `withTaskCancellationHandler`
-- [ ] Long-running Task handles stored if lifecycle needs to be managed
-- [ ] Service protocols marked with `Sendable`
-- [ ] Cancellation scenarios handled correctly
+- [ ] New async work uses async/await, not completion handlers or DispatchQueue
+- [ ] Callback APIs that can't change are bridged with checked continuations (resumed exactly once)
+- [ ] Concurrent child work uses `async let` / task groups rather than multiple loose `Task {}`s
+- [ ] `Task` handles are kept where the work must be cancelled or awaited (not "to keep it alive")
+- [ ] Shared mutable state is protected by an actor or `Mutex`
+- [ ] UI state lives in `@MainActor` (`@Observable`) types
+- [ ] `withTaskCancellationHandler` `onCancel` closures are thread-safe; cleanup uses `defer`
+- [ ] Long loops check cancellation
+- [ ] Service protocols are `Sendable` with explicit isolation

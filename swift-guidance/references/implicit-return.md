@@ -88,9 +88,9 @@ func isEven(_ value: Int) -> Bool {
 }
 ```
 
-### Not valid
+### Not a candidate
 
-This is **not** implicit return, because the body contains more than one statement:
+This compiles, but it can't use implicit return, because the body contains more than one statement:
 
 ```swift
 func squarePlusOne(_ value: Int) -> Int {
@@ -121,7 +121,11 @@ func priorityLabel(for score: Int) -> String {
 
 ### Important rules
 
-Each branch must produce a value.
+- `if` expressions need an `else` — without one, there's no value for the missing branch (`missing return in global function expected to return 'String'`).
+- They may only be the whole return value, a `throw` operand, or the right-hand side of an assignment. `"x" + if … { } else { }` is an error: `'if' may only be used as expression in return, throw, or as the source of an assignment`.
+- Each branch must be a single expression. A branch that logs and then yields a value, or an explicit `return` in one branch, turns it back into a statement that needs explicit `return`s.
+
+Each branch must produce a value — except a branch that `throw`s or calls a `Never`-returning function such as `fatalError()`.
 
 ```swift
 func accessText(isAdmin: Bool) -> String {
@@ -133,7 +137,7 @@ func accessText(isAdmin: Bool) -> String {
 }
 ```
 
-All branches must resolve to the same type.
+Every branch must convert to the result type. With a contextual type (the function's return type), `if b { 1 } else { 0.35 }` returning `Double` is fine; with no context (`let v = if … { 1 } else { 2.0 }`) the branch types must match (`branches have mismatching types 'Int' and 'Double'`).
 
 ```swift
 func badgeCountText(count: Int) -> String {
@@ -229,7 +233,7 @@ func shortName(for direction: Direction) -> String {
 }
 ```
 
-All cases must resolve to the same type.
+Every case must convert to the result type (same contextual-type rule as `if`); a case may `throw` or call `fatalError()`.
 
 ```swift
 func axis(for direction: Direction) -> String {
@@ -355,6 +359,8 @@ Avoid implicit return when:
 Example:
 
 ```swift
+import Foundation
+
 func processedName(_ input: String) -> String {
     let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
     let collapsed = trimmed.replacingOccurrences(of: "  ", with: " ")
@@ -379,4 +385,5 @@ For modern Swift code:
 - The Swift Programming Language: Functions
 - The Swift Programming Language: Expressions
 - The Swift Programming Language: Control Flow
-- Swift 5.9 release notes and revision history for the Swift book
+- [SE-0255: Implicit returns from single-expression functions](https://github.com/swiftlang/swift-evolution/blob/main/proposals/0255-omit-return.md) (Swift 5.1)
+- [SE-0380: `if` and `switch` expressions](https://github.com/swiftlang/swift-evolution/blob/main/proposals/0380-if-switch-expressions.md) (Swift 5.9)

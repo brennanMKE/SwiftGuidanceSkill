@@ -19,7 +19,7 @@ SwiftUI views should render correctly in both light and dark appearance. Two are
 }
 ```
 
-**Why this happens:** `preferredColorScheme` is a window-level preference, not a scope-local override. The last value set anywhere in the tree wins.
+**Why this happens:** `preferredColorScheme` is a preference, not a scope-local override. It propagates up to the nearest enclosing presentation (window, sheet, popover) and flows down to every view in it. When views set conflicting values, a modifier **higher in the hierarchy overrides everything below it — even when its value is `nil`**. So `.preferredColorScheme(theme.scheme)` at the root with `theme == .system` makes the window follow the OS and silently ignores every child's `.light`/`.dark`. Only when no ancestor sets the modifier do siblings compete, and then the **first non-nil preference in view order wins** (Apple docs). Verified on macOS 27 (Dark Mode host): sibling A `.light` + sibling B `.dark` → light window, reversed → dark; outer `.light` beat inner `.dark`; outer `nil` + inner `.light`/`.dark` → window followed the OS (dark), children ignored.
 
 ---
 
@@ -78,7 +78,7 @@ When you don't need a single side-by-side comparison, prefer multiple `#Preview`
 
 ## Backgrounds: Use Semantic Styles, Not UIKit-Only Colors
 
-A common mistake is reaching for `Color(.systemBackground)`. That's a `UIColor` initializer — it does not compile on macOS, visionOS, or in cross-platform packages.
+A common mistake is reaching for `Color(.systemBackground)`. That's a `UIColor` color — it compiles on iOS and visionOS but **not on macOS** (`reference to member 'systemBackground' cannot be resolved`) or **tvOS** (`'systemBackground' is unavailable in tvOS`), so it breaks multiplatform targets and cross-platform packages.
 
 ```swift
 // ❌ AVOID: UIKit-only, breaks macOS builds
@@ -239,7 +239,7 @@ If you find yourself swapping image names by scheme, that's a signal the variant
 | Pitfall | Problem | Solution |
 |---------|---------|----------|
 | `.preferredColorScheme` on a child view in a stacked preview | Propagates to the whole window; both halves render the same scheme | Use `.environment(\.colorScheme, …)` per branch, or split into two `#Preview` blocks |
-| `Color(.systemBackground)` | UIKit-only; breaks macOS/visionOS builds | Use `.background(.background)` |
+| `Color(.systemBackground)` | UIKit color; breaks macOS and tvOS builds | Use `.background(.background)` |
 | Hardcoded `Color.white` / `Color.black` | Ignores scheme; light text on light background or vice versa | Use an asset-catalog Color Set, a trait-based `UIColor`/`NSColor` closure, or `.primary` / `.secondary` |
 | `Image("logo-dark")` swapped by `\.colorScheme` | Two assets where one would do; easy to forget one variant | Add Any/Dark appearances inside a single asset and use `Image(.logo)` |
 | No background on previewed view | Picks up canvas color, masking the bug you're trying to verify | Add `.background(.background)` and `.frame(maxWidth: .infinity, maxHeight: .infinity)` |
@@ -253,7 +253,7 @@ If you find yourself swapping image names by scheme, that's a signal the variant
 When reviewing dark-mode issues, classify them so the skill's stopping rule (see `SKILL.md`) applies consistently:
 
 - **CRITICAL** — illegible UI in one scheme: hardcoded text or background colors that produce invisible content (white text on white background, black icon on black surface). User-facing breakage; ship-blocker.
-- **HIGH** — `Color(.systemBackground)` or other UIKit-only color initializers in cross-platform code (breaks macOS / visionOS builds); `.preferredColorScheme` applied to a child view inside a stacked preview (silently misleads the developer); hardcoded `Color.white` / `Color.black` / `Color.gray` in user-facing UI.
+- **HIGH** — `Color(.systemBackground)` or other UIKit-only color initializers in cross-platform code (breaks macOS / tvOS builds); `.preferredColorScheme` applied to a child view inside a stacked preview (silently misleads the developer); hardcoded `Color.white` / `Color.black` / `Color.gray` in user-facing UI.
 - **MEDIUM** — no dark-mode preview at all for a non-trivial view; branching on `\.colorScheme` purely to pick a color where an adaptive color would suffice; hardcoded shadow colors that vanish on dark surfaces.
 - **NICE-TO-HAVE** — stringly-typed `Color("Name")` instead of generated asset symbols; minor naming preferences for color sets.
 

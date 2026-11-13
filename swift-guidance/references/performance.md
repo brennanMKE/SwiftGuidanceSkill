@@ -41,16 +41,17 @@ let result = await fetchData()
 
 ---
 
-### NSLock and Synchronization — Bottlenecks Under Contention
+### NSLock and Manual Locking — Error-Prone, Not Compiler-Checked
 
-**Problem**: Locks serialize access and cause threads to block:
+**Problem**: hand-rolled locks around separate mutable state aren't checked by
+the compiler — nothing stops an access that forgets the lock:
 
 ```swift
-// ❌ AVOID: Explicit locking
+// ❌ AVOID: lock and state are unrelated as far as the compiler knows
 let lock = NSLock()
-var cachedData: [String: Any] = [:]
+var cachedData: [String: Data] = [:]
 
-func getData(key: String) -> Any? {
+func getData(key: String) -> Data? {
     lock.lock()
     defer { lock.unlock() }
     return cachedData[key]
@@ -58,38 +59,54 @@ func getData(key: String) -> Any? {
 ```
 
 **Why this is problematic**:
-- Lock contention causes threads to block waiting for acquisition
-- Blocking threads consume memory and system resources
-- Difficult to reason about — deadlocks possible with multiple locks
-- Context switches add latency
-- Can trigger priority inversion (low-priority thread blocking high-priority work)
+- The compiler can't verify every access takes the lock
+- Deadlocks are possible with multiple locks or re-entrant calls
+- The surrounding type needs `@unchecked Sendable`, hiding real races
 
-**Solution**: Use actors for thread-safe access:
+**Solution — choose by access pattern:**
 
 ```swift
-// ✅ PREFERRED: Actor with isolated state
+// ✅ Actor: callers can await; state accessed from many tasks
 actor DataCache {
-    private var cachedData: [String: Any] = [:]
+    private var cachedData: [String: Data] = [:]
 
-    func getData(key: String) -> Any? {
-        return cachedData[key]
+    func getData(key: String) -> Data? {
+        cachedData[key]
     }
 
-    func setData(_ value: Any, for key: String) {
+    func setData(_ value: Data, for key: String) {
         cachedData[key] = value
     }
 }
 
-// Usage (non-blocking)
-let cache = DataCache()
 let value = await cache.getData(key: "user")
 ```
 
-**Actor advantages**:
-- Compiler-enforced thread safety (no manual locking)
-- Non-blocking — caller is suspended, not blocked
-- Automatic serialization without lock contention
-- Integrates with async/await
+```swift
+// ✅ Mutex (Synchronization, iOS 18 / macOS 15+): access must stay synchronous,
+// critical sections are short. The state lives inside the lock, so the compiler
+// enforces locked access and the type is checked Sendable.
+import Synchronization
+
+final class DataCache: Sendable {
+    private let cachedData = Mutex<[String: Data]>([:])
+
+    func getData(key: String) -> Data? {
+        cachedData.withLock { $0[key] }
+    }
+
+    func setData(_ value: Data, for key: String) {
+        cachedData.withLock { $0[key] = value }
+    }
+}
+```
+
+**Trade-offs**:
+- Actors serialize too, but suspend callers instead of blocking threads; every
+  access becomes `async` and actor methods are re-entrant across `await`s
+- `Mutex` blocks briefly, keeps APIs synchronous, and is often faster for tiny
+  critical sections; never `await` while holding it (`withLock` doesn't allow it)
+- Below iOS 18 / macOS 15, `OSAllocatedUnfairLock(initialState:)` (iOS 16 / macOS 13+) has the same state-inside-the-lock shape
 
 ---
 
@@ -112,18 +129,18 @@ DispatchQueue.global(qos: .userInitiated).async {
 2. **Thread Starvation**: If many tasks queue up, new threads are created, consuming memory
 3. **Context Switching Overhead**: Too many threads cause expensive context switches
 4. **Scheduling Unpredictability**: GCD scheduler doesn't know about your async tasks
-5. **Difficult Cancellation**: No built-in cancellation mechanism like `CancellationToken`
+5. **Manual Cancellation**: only `DispatchWorkItem.cancel()`, which doesn't stop work already running or propagate to child work
 
 ### Solution: Swift Concurrency with Tasks and Structured Concurrency
 
 ```swift
 // ✅ PREFERRED: Swift concurrency
+@MainActor
 func loadData() async {
-    let data = await fetchData()  // Suspends, doesn't block
-    updateUI(data)  // Resumes on main thread
+    let data = await fetchData()  // Suspends (e.g. network I/O), doesn't block
+    updateUI(data)                // Back on the main actor
 }
 
-// Call it:
 Task {
     await loadData()
 }
@@ -131,7 +148,7 @@ Task {
 
 **Benefits**:
 - **Unified Executor Model**: Automatic thread pool management
-- **No Thread Exhaustion**: Tasks are lightweight, not tied to threads
+- **Bounded Threads**: Tasks run on a cooperative pool sized to the CPU core count, so no thread explosion — but **never block inside a task** (semaphores, `Thread.sleep`, synchronous I/O, waiting on a lock across slow work): blocked tasks hold pool threads and can starve the whole app
 - **Better Scheduling**: Runtime knows about async boundaries
 - **Built-in Cancellation**: `Task.isCancelled`, `withTaskCancellationHandler`
 - **Structured Concurrency**: Clear parent-child relationships
@@ -149,19 +166,33 @@ DispatchQueue.global().async {
     }
 }
 
-// ✅ Swift Concurrency
+// ❌ WRONG MIGRATION: a Task created on the main actor runs on the main actor.
+// With Approachable Concurrency (NonisolatedNonsendingByDefault), a plain
+// nonisolated async function also runs on the caller's actor — so this
+// moves the CPU work ONTO the main thread.
 Task {
     let result = await expensiveComputation()
-    updateUI(result)  // Implicitly on main (if called from @MainActor context)
+    updateUI(result)
+}
+
+// ✅ Swift Concurrency: mark the CPU-bound function @concurrent
+@concurrent
+func expensiveComputation() async -> Output { ... }   // always runs off the caller's actor
+
+Task {
+    let result = await expensiveComputation()   // hops off main, then back
+    updateUI(result)                            // on the main actor
 }
 ```
+
+See `nonisolated-concurrent.md` for where `nonisolated async` runs under each build configuration.
 
 **Pattern 2: Concurrent Operations with Dispatch Groups**
 
 ```swift
 // ❌ GCD with DispatchGroup
 let group = DispatchGroup()
-var results: [Result] = []
+var results: [Output] = []
 let queue = DispatchQueue(label: "work", attributes: .concurrent)
 
 for item in items {
@@ -178,14 +209,14 @@ group.notify(queue: .main) {
 
 // ✅ Swift Concurrency with TaskGroup
 Task {
-    let results = await withTaskGroup(of: Result.self) { group in
+    let results = await withTaskGroup(of: Output.self) { group in
         for item in items {
             group.addTask {
                 await processItem(item)
             }
         }
 
-        var collected: [Result] = []
+        var collected: [Output] = []
         for await result in group {
             collected.append(result)
         }
@@ -209,7 +240,7 @@ for item in items {
 }
 
 // ✅ Swift Concurrency with maxConcurrentTasks
-let results = await withTaskGroup(of: Result.self) { group in
+let results = await withTaskGroup(of: Output.self) { group in
     var pending = items.makeIterator()
     var activeTasks = 0
     let maxConcurrency = 3
@@ -221,7 +252,7 @@ let results = await withTaskGroup(of: Result.self) { group in
     }
 
     // As tasks complete, add more
-    var collected: [Result] = []
+    var collected: [Output] = []
     for await result in group {
         collected.append(result)
         if let item = pending.next() {
@@ -240,8 +271,9 @@ When reviewing code for performance and concurrency best practices:
 
 - [ ] `DispatchQueue.global().async` replaced with `Task` or async functions
 - [ ] `DispatchQueue.main.async` removed in favor of `@MainActor`
-- [ ] `DispatchSemaphore` replaced with actors or async/await
-- [ ] `NSLock` usage replaced with actors
+- [ ] `DispatchSemaphore` replaced with async/await (never `wait()` inside a task)
+- [ ] Manual `NSLock` + separate state replaced with an actor or `Mutex`
+- [ ] CPU-heavy work moved off the main actor with `@concurrent` (not just wrapped in `Task {}`)
 - [ ] `DispatchGroup` replaced with `withTaskGroup`
 - [ ] No blocking code on main thread (no `.wait()`, semaphore blocks, locks)
 - [ ] Thread exhaustion risks eliminated (using Swift Concurrency, not spawning many threads)

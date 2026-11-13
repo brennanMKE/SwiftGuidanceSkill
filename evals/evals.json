@@ -1,0 +1,163 @@
+{
+  "skill_name": "swift-guidance",
+  "evals": [
+    {
+      "id": 1,
+      "name": "swiftui-profile-view-review",
+      "prompt": "Can you review ProfileView.swift for SwiftUI anti-patterns? We target iOS 17+. The file is at evals/files/ProfileView.swift.",
+      "expected_output": "1-2 high-impact SwiftUI issues: ObservableObject -> @Observable and/or GeometryReader+onAppear stale width -> onGeometryChange; possibly unstable ForEach indices identity. Must not misreport the correctly scoped .animation(_:value:).",
+      "files": [
+        "evals/files/ProfileView.swift"
+      ],
+      "expectations": [
+        "Does not claim that .animation(.easeInOut, value: model.isExpanded) animates all state changes or recommend replacing it because of that",
+        "Identifies at least one of: ObservableObject/@StateObject should become @Observable/@State, or the GeometryReader+onAppear width capture (recommending onGeometryChange)",
+        "If GeometryReader is discussed, does not claim onGeometryChange requires iOS 17 (it is available from iOS 16)",
+        "If list identity is discussed, recommends stable identity rather than claiming List/ForEach over Identifiable data is index-based",
+        "Follows the skill's stopping rule: reports no more than 3 distinct issues"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "concurrency-thumbnail-ui-stutter",
+      "prompt": "After migrating our thumbnail code from GCD to async/await, scrolling stutters while thumbnails decode. Xcode 27 project with SWIFT_VERSION 6, Approachable Concurrency on, and MainActor default isolation. What's wrong? File: evals/files/ThumbnailLoader.swift",
+      "expected_output": "Explains decodeThumbnail (nonisolated async) runs on the caller's actor (the main actor) because Approachable Concurrency enables NonisolatedNonsendingByDefault, and Task {} created on the main actor runs there; fix by marking decodeThumbnail @concurrent. Synchronous Data(contentsOf:) in the Task is also main-thread I/O.",
+      "files": [
+        "evals/files/ThumbnailLoader.swift"
+      ],
+      "expectations": [
+        "Explains that the nonisolated async decodeThumbnail runs on the caller's actor (main actor) because of NonisolatedNonsendingByDefault / Approachable Concurrency",
+        "Recommends marking decodeThumbnail with @concurrent (or an equivalent explicit off-main mechanism) to move decoding off the main actor",
+        "Does not claim that the Swift 6 language mode by itself makes nonisolated async functions run on the caller's actor",
+        "Does not claim the unstored Task handles get cancelled or deallocated before completing"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "package-swift-concurrency-config",
+      "prompt": "Our iOS app (Xcode 27, Approachable Concurrency and MainActor default isolation turned on) depends on this local package, and async code in the package seems to run on different threads than the same code in the app. Is evals/files/Package.swift set up right for concurrency?",
+      "expected_output": "Package lacks NonisolatedNonsendingByDefault and InferIsolatedConformances (SwiftPM has no Approachable Concurrency switch), so nonisolated async behaves differently than in the app; StrictConcurrency is redundant under tools 6.x (Swift 6 mode); test target lacks the shared settings.",
+      "files": [
+        "evals/files/Package.swift"
+      ],
+      "expectations": [
+        "Recommends enabling NonisolatedNonsendingByDefault in the package's swiftSettings",
+        "Recommends enabling InferIsolatedConformances in the package's swiftSettings",
+        "Explains the behavioral mismatch: without NonisolatedNonsendingByDefault, nonisolated async functions in the package leave the caller's actor while the app's do not",
+        "Notes that the test target should get the same swiftSettings as the library target",
+        "Does not present .enableUpcomingFeature(\"StrictConcurrency\") as the missing or required fix for this problem"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "logging-privacy-and-signposts",
+      "prompt": "Our support team says logs from evals/files/Analytics.swift show <private> for the SKU and date even though QA was running a Debug build, and the signpost code in syncBatch doesn't compile. Can you sort it out?",
+      "expected_output": "Redaction depends on whether a debugger is attached, not Debug vs Release; strings/dates/custom types default private; mark non-sensitive values .public (keep userID private or hashed); info level isn't persisted; replace os_signpost+Logger with OSSignposter.",
+      "files": [
+        "evals/files/Analytics.swift"
+      ],
+      "expectations": [
+        "Explains that redaction does not depend on Debug vs Release build configuration (it depends on whether a debugger is attached / log privacy settings)",
+        "Recommends privacy: .public for non-sensitive values like sku while keeping userID private (or hashed with .private(mask: .hash))",
+        "Explains that the signpost code fails because os_signpost/OSSignpostID take an OSLog, not a Logger, and recommends OSSignposter (or creating an OSLog)",
+        "Does not claim that Date values are logged publicly by default"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "executable-main-swift-at-main",
+      "prompt": "My command-line tool in evals/files/ImageTool builds and runs fine with `swift build`, but when I add the same source file to an Xcode command-line tool target it fails with \"'main' attribute cannot be used in a module that contains top-level code\". Why, and what's the right fix?",
+      "expected_output": "@main inside main.swift: main.swift is treated as top-level code; SwiftPM passes -parse-as-library so it builds there, Xcode/swiftc don't. Fix: rename file (e.g. ImageTool.swift) or drop @main and use top-level code.",
+      "files": [
+        "evals/files/ImageTool/Package.swift",
+        "evals/files/ImageTool/Sources/ImageTool/main.swift"
+      ],
+      "expectations": [
+        "Identifies that @main is declared inside a file named main.swift, which the compiler treats as top-level code",
+        "Explains why SwiftPM builds it anyway (SwiftPM compiles executable targets with -parse-as-library) while Xcode/swiftc do not",
+        "Recommends renaming the file (e.g. ImageTool.swift) or removing @main in favor of top-level code",
+        "Does not claim that @main in main.swift can never build"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "swift6-without-approachable-concurrency",
+      "prompt": "Our Xcode 27 app uses SWIFT_VERSION = 6 and SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor, but we turned SWIFT_APPROACHABLE_CONCURRENCY off. A teammate wants to mark ReportBuilder.summarize @concurrent because \"in Swift 6, nonisolated async functions inherit the caller's actor, so this runs on the main thread and freezes the UI.\" Is that right? Does summarize run on the main thread today, and do we need the change? We plan to turn Approachable Concurrency on next sprint. File: ReportViewModel.swift",
+      "expected_output": "Today (no NonisolatedNonsendingByDefault) summarize runs on the global concurrent executor, off main; the Swift 6 language mode alone does not enable caller inheritance (SE-0461 is gated by the upcoming feature). Once Approachable Concurrency is on it would run on the main actor. Adding @concurrent is still the right change because it pins the behavior in both configurations.",
+      "files": [
+        "evals/files/ReportBuilder/ReportViewModel.swift"
+      ],
+      "expectations": [
+        "States that with Approachable Concurrency off, summarize currently runs off the main actor (not on the main thread)",
+        "Does not claim the Swift 6 language mode by itself makes nonisolated async functions inherit the caller's actor",
+        "Explains that enabling Approachable Concurrency (NonisolatedNonsendingByDefault) would make summarize run on the caller's (main) actor",
+        "Recommends @concurrent (or an equivalent explicit off-main spelling) so behavior is the same in both configurations",
+        "The fixed ReportViewModel.swift typechecks in Swift 6 mode with MainActor default isolation, with and without NonisolatedNonsendingByDefault (script-checked)"
+      ]
+    },
+    {
+      "id": 7,
+      "name": "system-colors-tvos-visionos",
+      "prompt": "CardView.swift lives in a single multiplatform SwiftUI target that we're expanding from iOS to iOS, macOS, tvOS and visionOS. Which of these colors will break the build, and on which platforms? Please give me a fixed CardView that builds on all four.",
+      "expected_output": "Color(.systemBackground)/Color(.secondarySystemBackground) are UIColor-based: they compile on iOS and visionOS but fail on macOS (no UIColor) and tvOS (unavailable). Fix with SwiftUI styles such as .background(.background) / .background(.background.secondary) or #if os guards.",
+      "files": [
+        "evals/files/CardView/CardView.swift"
+      ],
+      "expectations": [
+        "States that Color(.systemBackground) / Color(.secondarySystemBackground) compile on visionOS (does not say visionOS breaks)",
+        "States that they fail to compile on tvOS",
+        "States that they fail to compile on macOS",
+        "The fixed CardView.swift typechecks for iOS 17, macOS 14, tvOS 17 and visionOS 1 (script-checked)"
+      ]
+    },
+    {
+      "id": 8,
+      "name": "preferred-color-scheme-conflicts",
+      "prompt": "In ThemedApp.swift, the reader pane is supposed to always be dark and the promo banner always light, while the rest of the app follows the user's theme setting. QA says the whole window flips to light and the reader isn't dark. What scheme does the window actually end up with when the theme is .system, and when it's .dark? How should we fix it?",
+      "expected_output": "preferredColorScheme is a presentation-wide preference. An ancestor's modifier overrides descendants even when nil, so with .system the window follows the OS and both child preferences are ignored (QA on a light-mode Mac sees all light); with .dark the outer .dark wins. Among siblings with no overriding ancestor, the first non-nil wins. Fix: keep preferredColorScheme only at the root and use .environment(\\.colorScheme, ...) to scope the banner and reader.",
+      "files": [
+        "evals/files/ThemePreview/ThemedApp.swift"
+      ],
+      "expectations": [
+        "States that with theme .system the root .preferredColorScheme(nil) overrides the children, so the window follows the OS appearance and the banner/reader preferences are ignored",
+        "Does not claim that the last-set / last-in-tree preferredColorScheme value wins",
+        "States that with theme .dark the outer (app-level) preference wins, so the window is dark",
+        "Recommends .environment(\\.colorScheme, ...) (not preferredColorScheme) to scope the banner/reader subtrees",
+        "The fixed ThemedApp.swift typechecks for macOS 14 and iOS 17 (script-checked)"
+      ]
+    },
+    {
+      "id": 9,
+      "name": "task-cancellation-handler-cleanup",
+      "prompt": "We get occasional crashes when users cancel downloads in Downloader.swift (the crash log points at FileHandle.write on a closed handle). Can you review the cancellation handling? Also, a teammate added the comment in DownloadController.start \u2014 is it accurate?",
+      "expected_output": "onCancel runs immediately when cancellation happens, concurrently with the operation (and before it if already cancelled), so it closes the handle while the loop is still writing. Move close/remove into the operation (defer / catch), leave onCancel for thread-safe signalling or drop it. The comment is wrong: an unstored Task runs to completion and is not cancelled; store it only to cancel or await. Swift 6.4 also warns that the throwing Task's errors are ignored.",
+      "files": [
+        "evals/files/Downloader/Downloader.swift"
+      ],
+      "expectations": [
+        "Explains that onCancel runs immediately / concurrently with the operation rather than after the operation stops, so closing the handle races with in-flight writes",
+        "Moves the close/remove cleanup into the operation (defer or catch) instead of onCancel",
+        "States that the DownloadController comment is wrong: an unstored Task is not cancelled or deallocated early and runs to completion",
+        "Does not claim onCancel is a place for post-cancellation cleanup that runs after the operation finishes",
+        "The fixed Downloader.swift typechecks in Swift 6 mode with no errors (script-checked)"
+      ]
+    },
+    {
+      "id": 10,
+      "name": "internal-import-client-loading",
+      "prompt": "In the WeatherClient package we changed `import HTTPCore` to `internal import HTTPCore` so the apps that depend on WeatherClient no longer have to load HTTPCore when they build, which should speed up their builds. Someone suggested `@_implementationOnly import` instead because it's stronger and also keeps HTTPCore from loading at runtime. Is our reasoning right? Files are under evals/files/WeatherClient.",
+      "expected_output": "WeatherClient is not built with library evolution, so clients still load HTTPCore (SE-0409: all dependencies of a non-resilient module must be loaded by transitive clients). internal import does keep HTTPCore types out of WeatherClient's public API. @_implementationOnly doesn't change runtime loading either and is unsafe in non-resilient modules (6.4 warns); keep internal import.",
+      "files": [
+        "evals/files/WeatherClient/Package.swift",
+        "evals/files/WeatherClient/Sources/WeatherClient/WeatherClient.swift",
+        "evals/files/WeatherClient/Sources/HTTPCore/HTTPClient.swift"
+      ],
+      "expectations": [
+        "States that clients still load HTTPCore because WeatherClient is not built with library evolution (the skip-loading benefit only applies to resilient modules)",
+        "Explains what internal import does provide: HTTPCore types cannot appear in WeatherClient's public API",
+        "Recommends against @_implementationOnly (unsafe in non-resilient modules / superseded by internal import)",
+        "Does not claim that either internal import or @_implementationOnly prevents HTTPCore from being loaded or linked at runtime"
+      ]
+    }
+  ]
+}

@@ -86,7 +86,7 @@ loop, not noise.
 | View needs projected bindings into an observable (`$model.property`) | `@Bindable` |
 | App-wide store/service | `@Environment` |
 | Caches, delegates, closures, pending `Task`s, timers inside an `@Observable` type | `@ObservationIgnored` — implementation details must not invalidate views |
-| Hot-path store mutators that callers may re-assert (e.g. `store.focus(id:)`) | make the API idempotent at the store (`if x != newValue`), never rely on call-site discipline |
+| Hot-path store mutators that callers may re-assert (e.g. `store.focus(id:)`) | make the API idempotent at the store (`guard x != newValue`) when the mutator has side effects beyond the assignment or stores a non-`Equatable` value type — never rely on call-site discipline |
 
 Direct mutations of an observable model should normally live behind explicit
 store/model methods. Use `@Bindable` in a view when SwiftUI needs the
@@ -100,10 +100,22 @@ legacy or third-party code (see `ui.md`).
 
 ## Observation Semantics and Dependency Granularity
 
-- **Every write notifies — equal-value writes included.** `@Observable` has
-  no equality dedupe; re-assigning the same value still fires `withMutation`
-  and re-invalidates every dependent view. Hence the store-level idempotence
-  rule above:
+- **Equal-value writes are skipped — for some types.** On current
+  toolchains (verified Swift 6.4 / Xcode 27.2) the `@Observable` macro
+  generates `shouldNotifyObservers`, which suppresses the notification when
+  the new value is the same:
+
+  | Property type | Re-assigning the same value |
+  |---|---|
+  | `Equatable` (`Int`, `String`, `UUID?`, `Equatable` structs) | no notification (compared with `==`) |
+  | Class reference | no notification if it's the same instance (`===`); a new instance always notifies |
+  | Non-`Equatable` value type | **notifies** |
+
+  So a bare `focusedPaneID = id` with an unchanged `UUID?` no longer
+  invalidates views. A store-level guard is still the right shape when the
+  mutator does more than assign — logging, AppKit calls, starting tasks — or
+  stores a non-`Equatable` value, because those still run or notify on every
+  re-assertion:
 
   ```swift
   // ✅ Idempotence lives at the store, not the call site
@@ -111,11 +123,16 @@ legacy or third-party code (see `ui.md`).
   final class AppStateStore {
       private(set) var focusedPaneID: UUID?
       func focusPane(id: UUID?) {
-          guard focusedPaneID != id else { return }   // equal-value write would still notify
+          guard focusedPaneID != id else { return }   // skips the side effects below
           focusedPaneID = id
+          logger.debug("focus -> \(String(describing: id))")
+          promoteFirstResponder(for: id)
       }
   }
   ```
+
+  Dedupe only stops **same-value** echoes. Loops that ping-pong between
+  *different* values (see the case study) are untouched by it.
 
 - **Tracking is per property *read*.** A view depends on exactly what its
   body (and body's callees) read. Computed helpers broaden dependencies
@@ -283,7 +300,7 @@ and `NSWindow.firstResponder`:
 
 - [ ] No writes to observed state from `body`, view inits, `ViewModifier.body`, representable make/update, or `PreferenceKey.reduce`
 - [ ] Every `onChange`/`onAppear` write audited by the *origin* of the flip (event vs layout/focus/geometry) and the *meaning* of the trigger
-- [ ] Hot-path store mutators are idempotent at the store (`guard x != newValue`)
+- [ ] Hot-path store mutators with side effects (or non-`Equatable` values) are idempotent at the store (`guard x != newValue`)
 - [ ] Implementation details inside `@Observable` types (caches, tasks, delegates) marked `@ObservationIgnored`
 - [ ] Children receive narrow values, not whole observables, when they need one fact
 - [ ] No synchronous `makeFirstResponder` / `addSubview` / constraint-dirtying calls from SwiftUI-driven callbacks

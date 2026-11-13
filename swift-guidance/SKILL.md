@@ -1,10 +1,10 @@
 ---
 name: swift-guidance
-description: Review Swift code for correctness and modern API usage. Trigger when users ask to review Swift files, report concurrency issues (DispatchQueue vs async/await), thread safety problems, logging gaps, SwiftUI anti-patterns, "Modifying state during view update" warnings, Observation feedback loops, focus/selection bugs or AppKit-interop crashes, dark mode / preview issues, performance issues, multiplatform setup problems, or project/package build-setting configuration (MainActor default isolation, strict concurrency). Load relevant references based on the issue domain—concurrency, logging, actor isolation, project configuration, UI, observation state-mutation rules, dark mode, performance, or multiplatform configuration.
+description: Review Swift code for correctness and modern API usage. Trigger when users ask to review Swift files, report concurrency issues (DispatchQueue vs async/await), thread safety problems, logging gaps, SwiftUI anti-patterns, "Modifying state during view update" warnings, Observation feedback loops, focus/selection bugs or AppKit-interop crashes, dark mode / preview issues, performance issues, multiplatform setup problems, or project/package build-setting configuration (Swift 6 language mode, Approachable Concurrency, MainActor default isolation). Load relevant references based on the issue domain—concurrency, logging, actor isolation, project configuration, UI, observation state-mutation rules, dark mode, performance, or multiplatform configuration.
 license: MIT
 metadata:
   author: Brennan Stehling
-  version: "1.0"
+  version: "1.1"
 ---
 
 Review Swift code for correctness, modern API usage, and adherence to best practices. Report only genuine problems that impact safety, maintainability, or performance—do not nitpick style.
@@ -40,15 +40,16 @@ This skill is designed to review Swift code and provide targeted guidance. Use i
 
 Follow these modern Swift best practices:
 
-- **Concurrency**: Always use Swift Concurrency (async/await, Task, actors) instead of DispatchQueue, Combine callbacks, or completion handlers. In Swift 6+, use `@concurrent` to explicitly run work off-actor; understand that `nonisolated async` inherits the caller's isolation by default.
-- **Logging**: Use Apple's unified logging (`os.log`) with file-scoped loggers, never `print()` for debugging in production code.
-- **Project Configuration**: Enable MainActor-by-default isolation and complete strict concurrency. Xcode: `SWIFT_APPROACHABLE_CONCURRENCY = YES`, `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, `SWIFT_STRICT_CONCURRENCY = complete`. Swift packages (tools version 6.2+): a shared `swiftSettings` with `.enableUpcomingFeature("StrictConcurrency")` and `.defaultIsolation(MainActor.self)` applied to every target.
-- **Thread Safety**: Properly annotate types with `nonisolated` or `@MainActor` in MainActor-by-default projects. Flag UI updates that happen off the main thread.
-- **SwiftUI**: Use `@Observable` macro instead of `ObservableObject`. Avoid `GeometryReader` when `onGeometryChange()` works instead.
+- **Concurrency**: Use Swift Concurrency (async/await, `async let`, task groups, actors) instead of DispatchQueue or completion handlers in new code. Where `nonisolated async` runs depends on the `NonisolatedNonsendingByDefault` feature (enabled by Approachable Concurrency), **not** on the Swift 6 language mode: with it, the function runs on the caller's actor; without it, it leaves. Use `@concurrent` to run work off-actor and `nonisolated(nonsending)` to stay on the caller's actor regardless of settings. A dropped `Task` handle doesn't cancel the task — keep it only to cancel or await.
+- **Logging**: Use `Logger` (unified logging) with file-scoped `private let` loggers, never `print()` in production code. Strings, dates, and custom types are `<private>` unless marked `.public` (redaction depends on whether a debugger is attached, not on the build configuration); debug/info messages aren't persisted. Use `OSSignposter` for signposts.
+- **Project Configuration**: Build in the Swift 6 language mode with Approachable Concurrency and MainActor-by-default isolation. Xcode: `SWIFT_VERSION = 6.0` (templates default to 5.0 — change it), `SWIFT_APPROACHABLE_CONCURRENCY = YES`, `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. `SWIFT_STRICT_CONCURRENCY` only applies in Swift 5 mode. Swift packages (tools version 6.2+): a shared `swiftSettings` with `.defaultIsolation(MainActor.self)`, `.enableUpcomingFeature("NonisolatedNonsendingByDefault")`, and `.enableUpcomingFeature("InferIsolatedConformances")` applied to every target — SwiftPM has no Approachable Concurrency switch.
+- **Thread Safety**: In MainActor-by-default projects, mark value types and protocols used off the main actor `nonisolated` (otherwise their methods, conformances such as `Codable`, and protocol requirements are `@MainActor`). Protect shared mutable state with an actor (async access) or `Mutex` (synchronous access). Flag UI updates that happen off the main thread.
+- **SwiftUI**: Use `@Observable` instead of `ObservableObject` when targeting iOS 17 / macOS 14+ (`@Observable` adds change tracking, not thread safety). Read geometry with `onGeometryChange()` (iOS 16 / macOS 13+) rather than `GeometryReader`. Keep `@State` defaults and view inits free of side effects. `List`/`ForEach` identity must be stable and unique. `.animation(_:value:)` is already scoped to its value.
 - **Observation state-mutation rules**: View construction is pure — never write observed state from `body`, view inits, representable make/update, or `PreferenceKey.reduce`. Audit `onChange`/`onAppear` writes by what flipped the observed value (event-origin is routine; layout/focus/geometry-origin can be executing inside AppKit's layout pass). One authority per two-way-synced fact, one writer per direction; never reconstruct user intent from downstream observable flips. `Task { @MainActor }` is not a fix for an update-transaction violation — restructure who owns the write, not when it runs.
-- **Dark Mode**: Use `.environment(\.colorScheme, …)` (subtree-scoped) for side-by-side previews; `.preferredColorScheme` propagates to the entire window. Use `.background(.background)` instead of UIKit-only `Color(.systemBackground)`. Custom colors must be adaptive (asset catalog or `Color(light:dark:)`).
+- **Dark Mode**: Use `.environment(\.colorScheme, …)` (subtree-scoped) for side-by-side previews; `.preferredColorScheme` propagates to the entire window, an ancestor's modifier overrides descendants' even when its value is `nil` (so a root "follow system" setting disables child overrides), and among siblings the first non-nil preference wins. Use `.background(.background)` instead of `Color(.systemBackground)` (UIKit color; fails on macOS and tvOS). Custom colors must be adaptive (asset catalog, or a `UIColor`/`NSColor` dynamic provider — `Color(light:dark:)` is not a built-in API).
 - **Multiplatform**: Use SDK-specific build settings (`[sdk=iphone*]` and `[sdk=macos*]`) when supporting multiple platforms to prevent platform-specific defaults from leaking.
-- **Modules & Imports**: Under Swift 6.0+ (SE-0409), mark imports `public` only when the dependency's types appear in your module's public API; prefer `internal import` for implementation-detail dependencies. Under Swift 6.1+ (SE-0444), every extension member, operator, or conformance you use must come from a directly-imported module — not a transitive one. Avoid `@_implementationOnly`.
+- **Modules & Imports**: Under Swift 6.0+ (SE-0409), mark imports `public` only when the dependency's types appear in your module's public API; prefer `internal import` for implementation-detail dependencies. With `MemberImportVisibility` (SE-0444, Swift 6.1+; upcoming feature, but on in Xcode 27 new-project templates), extension members you use must come from a directly-imported module — not a transitive one. Avoid `@_implementationOnly`.
+- **Executables**: One entry point per module — a `@main` type *or* `main.swift` top-level code, never `@main` inside `main.swift` (fails with `swiftc`/Xcode even though SwiftPM tolerates it).
 - **Performance**: Prioritize efficient resource usage and minimize unnecessary allocations.
 
 ## Guidance Process
@@ -75,9 +76,9 @@ Only load references that apply to the code or the user's question:
 |--------------|---|---|
 | DispatchQueue, Combine, completion handlers | `references/concurrency.md` | Code uses old patterns OR user asks about async code |
 | print() debugging, logging setup | `references/logging.md` | Code uses `print()` OR user asks about debugging/observability |
-| Build settings, default isolation, strict concurrency setup | `references/project-configuration.md` | Reviewing an Xcode project / `Package.swift` for concurrency settings OR user asks how to enable MainActor-by-default or strict concurrency |
+| Build settings: Swift language mode, Approachable Concurrency, default isolation | `references/project-configuration.md` | Reviewing an Xcode project / `Package.swift` for concurrency settings OR user asks how to enable Swift 6, Approachable Concurrency, or MainActor-by-default |
 | @MainActor, actor isolation, thread safety | `references/actor-isolation.md` | Code has thread-safety concerns OR MainActor-by-default warnings |
-| `nonisolated async`, `@concurrent` isolation | `references/nonisolated-concurrent.md` | Code uses `nonisolated async` OR needs `@concurrent` for off-actor work, or has Swift 6 isolation issues |
+| `nonisolated async`, `nonisolated(nonsending)`, `@concurrent` | `references/nonisolated-concurrent.md` | Code uses `nonisolated async` OR needs `@concurrent` for off-actor work, or has Swift 6 isolation issues |
 | SwiftUI patterns, state management | `references/ui.md` | Code uses SwiftUI AND has ObservableObject, GeometryReader, or state issues |
 | Observed-state writes during view updates, Observation feedback loops, model ↔ AppKit sync | `references/swiftui-observation.md` | "Modifying state during view update" / "tried to update multiple times per frame" warnings, `EXC_BREAKPOINT` in `_NSViewLayout`, focus/selection bugs, writes inside `onChange`/`body`/representable updates, OR user is adding state writes to view-driven callbacks |
 | Light/dark mode, SwiftUI previews, adaptive colors | `references/dark-mode.md` | Code defines `#Preview` with multiple color schemes, uses `.preferredColorScheme` / `Color(.systemBackground)` / hardcoded `.white` / `.black`, OR user asks about dark mode support |
@@ -85,7 +86,7 @@ Only load references that apply to the code or the user's question:
 | iOS + macOS setup, letterboxing | `references/multiplatform.md` | Project supports multiple platforms AND has build/layout issues |
 | Implicit return in functions/expressions | `references/implicit-return.md` | Code has explicit `return` statements that could be implicit OR user asks about modern Swift style |
 | Executable entry points, `@main`, file naming | `references/executables.md` | Code defines an executable target OR user asks about entry points or `main.swift` naming |
-| `public import` errors, "not imported publicly", "requires import of module", transitive extension members, `@_implementationOnly` | `references/transitive-dependencies.md` | Code shows SE-0409 / SE-0444 build errors, project is migrating to Swift 6.0 / 6.1, OR user asks about module access levels or transitive imports |
+| `public import` errors, "not imported publicly", "missing import of defining module", transitive extension members, `@_implementationOnly` | `references/transitive-dependencies.md` | Code shows SE-0409 / SE-0444 build errors, project is migrating to Swift 6.0 / 6.1, OR user asks about module access levels or transitive imports |
 
 **Example:** User asks "how do I migrate from ObservableObject?" → Load only `references/ui.md`.
 
@@ -110,13 +111,17 @@ Before reporting, classify each issue. **Then apply the stopping rule.**
 
 **HIGH (report 1-2 per area, then stop):**
 - `GeometryReader` when `onGeometryChange()` would work
-- `ObservableObject` when `@Observable` is available (Swift 5.9+)
-- Immutable value types marked `@MainActor` (should be `nonisolated`)
+- `ObservableObject` when `@Observable` is available (deployment target iOS 17 / macOS 14 / tvOS 17 / watchOS 10+)
+- Data-model value types used off the main actor left `@MainActor` by default isolation (should be `nonisolated`)
 - Missing `@MainActor` on UI-bound code in MainActor-by-default projects
-- `nonisolated async` functions that should use `@concurrent` to explicitly run off-actor (Swift 6+)
-- Incorrect use of `@concurrent` in Swift 6+ (combining with `@MainActor`, or accessing actor-isolated state)
+- `DispatchQueue.global().async` migrated to `Task {}` from the main actor without `@concurrent` on the CPU-heavy work (the work now runs on the main thread)
+- CPU-heavy `nonisolated async` functions without `@concurrent` in projects with `NonisolatedNonsendingByDefault` (they run on the caller's actor — often main)
+- Package and app targets with mismatched concurrency settings (package missing `NonisolatedNonsendingByDefault` / `InferIsolatedConformances`), or an Xcode target left at `SWIFT_VERSION = 5.0`
+- Incorrect use of `@concurrent` (on sync functions, combined with `@MainActor`, or accessing actor-isolated state — all compile errors)
+- `withTaskCancellationHandler` `onCancel` closures that aren't thread-safe, or used for cleanup that belongs in `defer`
 - `Task { @MainActor }` hops used to silence an update-transaction violation instead of restructuring write ownership
-- Non-idempotent hot-path store mutators (`@Observable` re-notifies on equal-value writes; guard at the store)
+- Non-idempotent hot-path store mutators whose side effects (logging, AppKit calls, tasks) re-run on every re-assertion — guard at the store (`@Observable` dedupes equal `Equatable` values and identical references, but not non-`Equatable` values or side effects)
+- Unstable `List`/`ForEach` identity (`indices` with `id: \.self`, regenerated `UUID()` IDs, `id: \.self` on non-unique values)
 - Implementation details inside `@Observable` types (caches, pending Tasks, delegates) not marked `@ObservationIgnored`
 
 **Report HIGH issues if no CRITICAL exist in that area, but STOP after 1-2.**
@@ -256,7 +261,7 @@ No critical issues found. Well done!
 - Issues beyond the 1-2 per area limit, no matter how valid they are
 
 ❌ **Don't assume:**
-- The project uses Swift 6 or MainActor-by-default (ask or infer from code)
+- The project uses Swift 6, Approachable Concurrency, or MainActor-by-default (check build settings / `Package.swift`, or ask)
 - The user needs all 6 areas reviewed (scope to what matters)
 - Completion handlers are always wrong (sometimes necessary for callbacks that live outside async contexts)
 
@@ -278,10 +283,10 @@ Load these as needed (see Step 2 above):
 
 - `references/concurrency.md` — Modern Swift Concurrency patterns, avoiding DispatchQueue and Combine
 - `references/logging.md` — Structured logging with `os.log` and proper setup
-- `references/project-configuration.md` — Xcode and Swift package build settings for MainActor-by-default isolation and strict concurrency
+- `references/project-configuration.md` — Xcode and Swift package build settings: Swift 6 language mode, Approachable Concurrency, MainActor-by-default isolation
 - `references/actor-isolation.md` — Actor isolation in MainActor-by-default projects
-- `references/nonisolated-concurrent.md` — `nonisolated async` evolution, `@concurrent` attribute, Swift 6 concurrency patterns
-- `references/ui.md` — SwiftUI patterns, @Observable, avoiding GeometryReader
+- `references/nonisolated-concurrent.md` — where `nonisolated async` runs under each configuration, `nonisolated(nonsending)`, `@concurrent`
+- `references/ui.md` — SwiftUI patterns: @Observable, `@State` initialization, geometry APIs, list identity, animation scoping, navigation
 - `references/swiftui-observation.md` — State-mutation rules for `@Observable`/`@State`: which contexts may write observed state, Observation dependency granularity, AppKit interop hazards (layout-pass crashes), two-way model ↔ AppKit sync direction rules, and the symptom → cause table for feedback loops
 - `references/dark-mode.md` — Previewing light/dark mode, `colorScheme` environment vs `preferredColorScheme`, cross-platform adaptive backgrounds and colors
 - `references/performance.md` — Performance optimization and resource efficiency

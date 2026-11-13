@@ -1,25 +1,25 @@
-# Swift Concurrency: `nonisolated` Evolution and `@concurrent`
+# Swift Concurrency: `nonisolated async`, `nonisolated(nonsending)`, and `@concurrent`
 
 ## Overview
 
-Swift's concurrency model has evolved significantly between Swift 5 and Swift 6, especially around how `nonisolated` async functions behave.
-
-This document explains:
+Where a `nonisolated async` function runs depends on a **compiler setting**,
+not just the Swift version. This document explains:
 
 - What `nonisolated` means
-- How its behavior changed over time
-- How it behaves in Swift 6
-- How to use `@concurrent` to explicitly leave actor isolation
+- The two execution models for `nonisolated async` and how to tell which one
+  a project uses
+- `nonisolated(nonsending)` and `@concurrent` — the explicit spellings that
+  mean the same thing in every configuration
+
+Behavior below was verified with Swift 6.4 by running code under each flag
+combination (`Thread.isMainThread` inside the callee).
 
 ---
 
 ## What `nonisolated` Means
 
-`nonisolated` means:
-
-> A function is **not isolated to any actor**, even if it is declared inside one.
-
-Example:
+A `nonisolated` declaration is **not isolated to any actor**, even if it is
+declared inside one.
 
 ```swift
 actor Cache {
@@ -35,17 +35,15 @@ actor Cache {
 - It cannot access `storage`
 - It does not require `await`
 
+Synchronous `nonisolated` functions always run on the caller's thread/actor.
+
 ---
 
-## Historical Behavior (Swift 5.7 – Swift 6 baseline)
+## The Two Models for `nonisolated async`
 
-### SE-0338 Model
+### Model 1 — leaves the caller's actor (SE-0338)
 
-In earlier Swift concurrency:
-
-> `nonisolated async` functions **never ran on an actor's executor**
-
-That means:
+This is the behavior in **Swift 5 and Swift 6 language modes by default**.
 
 ```swift
 @MainActor
@@ -54,41 +52,18 @@ func caller() async {
 }
 
 nonisolated func work() async {
-    // runs off MainActor
+    // runs on the global concurrent executor — off the main actor
 }
 ```
 
-Behavior:
+### Model 2 — runs on the caller's actor (SE-0461, Swift 6.2+)
 
-- Calling `work()` **leaves MainActor**
-- It runs on a generic executor
-- Execution returns to MainActor after `await`
+Enabled by the **`NonisolatedNonsendingByDefault`** upcoming feature. It is
+**not** turned on by the Swift 6 language mode. It's enabled by:
 
-### Important Distinction
-
-| Function Type | Behavior |
-|------|--------|
-| `nonisolated sync` | Runs on caller's actor |
-| `nonisolated async` | Leaves actor |
-
-This inconsistency was confusing.
-
----
-
-## New Behavior (Swift Evolution SE-0461)
-
-Swift introduces a new model to unify behavior.
-
-### Key Change
-
-> `nonisolated async` functions can now run on the **caller's actor by default**
-
-This behavior is enabled with:
-
-- Swift 6+
-- `NonisolatedNonsendingByDefault` feature
-
-### New Default Behavior
+- Xcode: `SWIFT_APPROACHABLE_CONCURRENCY = YES` (on in Xcode 26+/27 app templates)
+- SwiftPM: `.enableUpcomingFeature("NonisolatedNonsendingByDefault")`
+- Command line: `-enable-upcoming-feature NonisolatedNonsendingByDefault`
 
 ```swift
 @MainActor
@@ -97,114 +72,93 @@ func caller() async {
 }
 
 nonisolated func work() async {
-    // runs on MainActor (by default in new model)
+    // runs on the main actor — no hop
 }
 ```
 
-Now:
+### Verified behavior
 
-- No automatic actor hop
-- Matches synchronous behavior
+| Configuration | `nonisolated async` called from `@MainActor` | `@concurrent` |
+|---|---|---|
+| Swift 6 mode | **off** main | off main |
+| Swift 6 + `-default-isolation=MainActor` | **off** main | off main |
+| Swift 6 + `NonisolatedNonsendingByDefault` | **on** main | off main |
+| Swift 5 + `NonisolatedNonsendingByDefault` | **on** main | off main |
 
----
-
-## Why This Change Matters
-
-Before:
-
-- `await` often implied an actor hop
-- Hard to reason about execution
-
-After:
-
-- Isolation is consistent
-- No implicit hops unless explicitly requested
+**Before reviewing `nonisolated async` code, check the build settings** (see
+`project-configuration.md`). A Swift package that sets only
+`.defaultIsolation(MainActor.self)` is in Model 1, even when the app using it
+is in Model 2.
 
 ---
 
-## Introducing `@concurrent`
+## Explicit Spellings (Same Meaning in Every Configuration)
 
-To explicitly force execution **outside of actor isolation**, Swift introduces:
+### `nonisolated(nonsending)` — run on the caller's actor
 
 ```swift
-@concurrent
+nonisolated(nonsending) func work() async {
+    // always runs on the caller's actor, with or without the upcoming feature
+}
 ```
 
-### Definition
+Use it in code that must behave the same across targets (shared packages),
+or to adopt Model 2 for one function before enabling the feature.
 
-> `@concurrent` means the function always runs on the **concurrent executor**, not the caller's actor.
-
----
-
-## Using `@concurrent`
-
-### Basic Example
+### `@concurrent` — always leave the caller's actor
 
 ```swift
-struct Processor {
+struct ImageProcessor {
     @concurrent
-    func process(_ data: Data) async -> Data {
-        data
+    func decode(_ data: Data) async -> CGImage? {
+        // always runs on the global concurrent executor
     }
 }
-```
 
-### Calling from MainActor
-
-```swift
 @MainActor
-func run() async {
-    let result = await Processor().process(Data())
+func show(_ data: Data) async {
+    let image = await ImageProcessor().decode(data)   // hops off main, back after
 }
 ```
 
-Behavior:
+Arguments and results crossing into a `@concurrent` function must be
+`Sendable` (or disconnected values).
 
-1. Start on MainActor
-2. Call `process`
-3. Leave MainActor
-4. Run on concurrent executor
-5. Resume on MainActor
+`@concurrent` implies `nonisolated`. Writing `@concurrent nonisolated` is
+accepted (redundant); `nonisolated @concurrent` is a parse error, because
+attributes must come before modifiers.
 
 ---
 
-## Rules for `@concurrent`
+## Rules for `@concurrent` (all verified as compile errors)
 
 ### 1. Only for async functions
 
 ```swift
 @concurrent
-func invalid() { } // ❌ not allowed
+func invalid() { }
+// ❌ error: cannot use @concurrent on non-async global function 'invalid()'
 ```
-
----
 
 ### 2. Implies `nonisolated`
 
 ```swift
-@concurrent
-func work() async { }
+@concurrent func work() async { }
+// same isolation as: nonisolated func work() async { }  under Model 1
 ```
 
-Equivalent to:
+### 3. Cannot combine with another isolation
 
 ```swift
-nonisolated func work() async { }
+@MainActor @concurrent
+func invalid() async { }
+// ❌ error: global function 'invalid()' has multiple actor-isolation attributes (@MainActor and @concurrent)
 ```
-
----
-
-### 3. Cannot combine with actor isolation
-
-```swift
-@MainActor
-@concurrent
-func invalid() async { } // ❌ error
-```
-
----
 
 ### 4. Cannot access actor state
+
+`@concurrent` is allowed on a method declared inside an actor, but the method
+is nonisolated:
 
 ```swift
 actor Store {
@@ -212,7 +166,8 @@ actor Store {
 
     @concurrent
     func update() async {
-        value += 1 // ❌ error
+        value += 1
+        // ❌ error: actor-isolated property 'value' can not be mutated from a nonisolated context
     }
 }
 ```
@@ -223,65 +178,49 @@ actor Store {
 
 Use it when:
 
-- You are on `MainActor`
-- You want to perform heavy work off the UI thread
-- You want explicit control over execution
+- The caller is (or may be) on the main actor
+- The function does CPU-heavy or blocking work (decoding, parsing, image processing)
+- You want the hop to be explicit and independent of build settings
 
-Example:
-
-```swift
-struct ImageProcessor {
-    @concurrent
-    func decode(_ data: Data) async -> Image {
-        Image()
-    }
-}
-```
-
----
-
-## Mental Model
-
-### Old Model
-
-- `nonisolated async` → always leaves actor
-
-### New Model
-
-- `nonisolated async` → stays on caller actor (default)
-- `@concurrent` → explicitly leaves actor
+Don't use it on functions that just `await` other async APIs (e.g. `URLSession`)
+— those suspend without blocking, so running on the caller's actor is fine.
 
 ---
 
 ## Code Review Guidance
 
-When reviewing code:
-
-1. **Check if `nonisolated async` is intended to leave isolation** — In Swift 6+ with the new model, it won't. If the function needs to run off-actor, use `@concurrent` instead.
-
-2. **Flag misused `@concurrent`** — `@concurrent` should only be used when you explicitly need to hop off the caller's actor. If the function is naturally nonisolated, just use `nonisolated` (or don't annotate).
-
-3. **Verify actor state access** — Functions marked `@concurrent` cannot access actor-isolated state. If they do, remove `@concurrent` or refactor to not access actor state.
-
-4. **MainActor considerations** — Heavy computation on MainActor should use `@concurrent` to explicitly move work to a background thread. UI updates need to return to MainActor.
+1. **Determine the model first.** Check `SWIFT_APPROACHABLE_CONCURRENCY` /
+   `NonisolatedNonsendingByDefault`. Don't assume Swift 6 mode implies Model 2.
+2. **Heavy work in `nonisolated async` under Model 2** runs on the caller's
+   actor — often the main actor. Mark it `@concurrent`.
+3. **Code that relies on Model 1 hopping** (heavy work in `nonisolated async`
+   in a Swift 6 project without the feature) breaks silently when the feature
+   is enabled. Make the intent explicit with `@concurrent`.
+4. **Shared packages**: prefer `nonisolated(nonsending)` / `@concurrent` over
+   relying on the default, since consumers and the package may be configured
+   differently.
+5. **`@concurrent` must not touch actor state** and can't be combined with
+   `@MainActor` or other isolation.
 
 ---
 
 ## Summary
 
-| Feature | Behavior |
+| Declaration | Runs on |
 |--------|--------|
-| `@MainActor` | Runs on main actor |
-| `nonisolated` | Not actor-isolated |
-| `nonisolated async` (old) | Leaves actor |
-| `nonisolated async` (new) | Inherits caller actor |
-| `@concurrent` | Forces concurrent executor |
+| `@MainActor func f() async` | main actor |
+| `nonisolated func f()` (sync) | caller's context |
+| `nonisolated func f() async` — default | **off** the caller's actor |
+| `nonisolated func f() async` — `NonisolatedNonsendingByDefault` | caller's actor |
+| `nonisolated(nonsending) func f() async` | caller's actor (any configuration) |
+| `@concurrent func f() async` | global concurrent executor (any configuration) |
 
 ---
 
 ## Key Takeaways
 
-- Isolation is determined by the function declaration
-- Swift 6 reduces implicit actor hops
-- `@concurrent` is the explicit way to run work off an actor
-- Prefer explicit isolation for clarity and correctness
+- The Swift 6 language mode does **not** change where `nonisolated async` runs;
+  the `NonisolatedNonsendingByDefault` feature does
+- Xcode's Approachable Concurrency enables it; SwiftPM needs it by name
+- `@concurrent` and `nonisolated(nonsending)` are explicit and portable — prefer
+  them where behavior matters
